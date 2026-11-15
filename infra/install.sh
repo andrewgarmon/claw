@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Rebuild claw's CD + Claude Code plumbing from this repo. Safe to re-run.
+# Prereqs: users drew + openclaw exist, OpenClaw installed for openclaw (see README).
+# Don't run this directly. Run (as drew): sudo claw-install
+# claw-install clones origin/main into a root-only dir and runs this from there.
+set -euo pipefail
+[ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
+cd "$(dirname "$0")"
+
+# Refuse to run from a tree anyone but root could have changed (e.g. ~openclaw/.openclaw/infra,
+# which Navi's user can write between claw-sync resets): every directory from here up to /
+# and every file under here must be root-owned and not group/other-writable.
+untrusted() {
+  local d uid mode
+  d=$(pwd -P)
+  while :; do
+    read -r uid mode < <(stat -c '%u %a' "$d")
+    { [ "$uid" = 0 ] && (( (8#$mode & 8#022) == 0 )); } || { echo "$d"; return 0; }
+    [ "$d" = / ] && break
+    d=$(dirname "$d")
+  done
+  find . \( ! -user root -o -perm /022 \) -print -quit | grep . && return 0
+  return 1
+}
+if bad=$(untrusted); then
+  echo "install.sh: refusing to run from a tree root doesn't own ($bad)." >&2
+  echo "Run: sudo claw-install   (first time: see infra/README.md, \"Applying infra\")" >&2
+  exit 1
+fi
+echo "installing ${CLAW_INSTALL_SHA:-from $(pwd -P)}"
+id openclaw >/dev/null 2>&1 || { echo "create the openclaw user and install OpenClaw first" >&2; exit 1; }
+
+# --- brokers (infra/brokers/<name>/: a user holding one secret, a fixed set of verbs via sudo).
+# agent-git (gitbot) is one. Parse and check every broker.conf before changing anything.
+unset BROKER_ROOT
+# shellcheck source=lib/broker-install.sh
+. lib/broker-install.sh
+brokers_check brokers/*/ || { echo "install.sh: $B_ERR" >&2; exit 1; }
+install -d -m 755 -o root -g root /usr/local/lib/claw /usr/local/lib/claw/brokers
+install -m 644 -o root -g root lib/broker.sh /usr/local/lib/claw/broker.sh
+for b in brokers/*/; do broker_install "$b"; done
+broker_prune brokers
+
+# --- deploy timer (claw-sync) + nightly state backup (claw-backup)
+command -v curl >/dev/null || apt-get install -y curl   # claw-sync healthchecks pings
+install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
+install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
+install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
+
+# --- Claude Code as coder (ACP target)
+id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
+install -d -m 755 -o coder -g coder /srv/work
+install -d -m 700 -o coder -g coder /home/coder/.config /home/coder/.claude
+install -m 755 -o root -g root coder-acp /usr/local/bin/
+visudo -cf coder.sudoers
+install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
+install -m 644 -o coder -g coder coder-CLAUDE.md /home/coder/.claude/CLAUDE.md
+# coder's commit identity: agent-git checks author/committer against redact.txt for public repos
+sudo -H -u coder git -C /home/coder config --global user.name 'Claude Code'  # -C: coder can't stat root's cwd
+sudo -H -u coder git -C /home/coder config --global user.email claude@claw.invalid
+
+# --- gateway systemd drop-ins (heap size, compile cache)
+D=/home/openclaw/.config/systemd/user/openclaw-gateway.service.d
+install -d -m 755 -o openclaw -g openclaw "$D"
+install -m 644 -o openclaw -g openclaw gateway-dropins/*.conf "$D/"
+
+systemctl daemon-reload
+systemctl enable --now claw-sync.timer claw-backup.timer
+
+[ -s /home/coder/.config/coder.env ]   || echo "TODO: coder read-only GitHub token (README: secrets)"
+grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
+grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
+[ -x /home/coder/.local/bin/claude ]   || echo "TODO: install + log in Claude Code as coder (README)"
+echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload"

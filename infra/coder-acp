@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Start Claude Code's ACP adapter as coder. OpenClaw's acpx runs: sudo -n -u coder /usr/local/bin/coder-acp
+# sudo clears the gateway's environment, so coder only gets its own read-only GitHub token.
+set -euo pipefail
+export HOME=/home/coder
+export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+if [ -f "$HOME/.config/coder.env" ]; then set -a; . "$HOME/.config/coder.env"; set +a; fi
+case "$PWD" in /srv/work|/srv/work/*) ;; *) cd /srv/work ;; esac
+exec npx -y @agentclientprotocol/claude-agent-acp

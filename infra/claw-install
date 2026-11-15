@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# claw-install: apply infra/ from a fresh, root-owned clone of origin/main.
+#
+# install.sh runs as root. Running it from /home/openclaw/.openclaw/infra/ would let Navi's
+# user (who can write that tree between claw-sync resets) change what root executes. So this
+# bootstrap never runs anything from that checkout: it clones origin/main into a root-only
+# temp dir, shows what changed in infra/ since the last install, asks, runs install.sh from
+# the clone, records the commit and deletes the clone.
+#
+# Installed root-owned to /usr/local/sbin/claw-install (it updates itself from the clone after
+# each install). First install: see infra/README.md ("Applying infra").
+# Usage (as drew): sudo claw-install [-y]
+set -euo pipefail
+umask 077
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root
+REPO=https://github.com/andrewgarmon/claw-config.git
+TOKEN_FILE=/home/coder/.config/coder.env
+STATE=/var/lib/claw-install
+WORK_BASE=/root
+SELF=/usr/local/sbin/claw-install
+
+die() { echo "claw-install: $*" >&2; exit 1; }
+
+# git as root: token from the env via a credential helper (never argv), no hooks, no prompts
+export GIT_TERMINAL_PROMPT=0
+GIT=(git -c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
+     -c core.hooksPath=/dev/null -c core.fsmonitor=)
+
+read_token() {
+  # coder's read-only token (coder can write that file, so parse it, never source it)
+  local t=
+  if [ -f "$TOKEN_FILE" ] && [ ! -L "$TOKEN_FILE" ]; then
+    t=$(sed -n 's/^GH_TOKEN=//p' "$TOKEN_FILE" | head -1)
+  fi
+  if [ -z "$t" ]; then
+    [ -t 0 ] || die "no token in $TOKEN_FILE and no terminal to ask for one"
+    read -rsp "No GitHub token in $TOKEN_FILE. Paste a read-only token for claw-config (not saved): " t; echo >&2
+  fi
+  [[ "$t" =~ ^[A-Za-z0-9_]{20,255}$ ]] || die "token doesn't look like a GitHub token"
+  GH_TOKEN=$t; export GH_TOKEN
+}
+
+page() { if command -v less >/dev/null; then less -R; else cat; fi; }
+
+confirm() {  # confirm <repo> <sha> <last>: show what changed in infra/, ask y/n/d
+  local r=$1 sha=$2 last=$3 ans
+  echo "origin/main: $(git -C "$r" log -1 --format='%h %s (%cr)' "$sha")"
+  if [ -z "$last" ]; then
+    echo "no previous install recorded; installing all of infra/:"
+    git -C "$r" ls-tree -r --name-only "$sha" -- infra/ | sed 's/^/  /'
+  elif [ "$last" = "$sha" ]; then
+    echo "already installed at this commit (re-running is safe)"
+  elif git -C "$r" cat-file -e "$last^{commit}" 2>/dev/null; then
+    echo "infra/ changes since the last install (${last:0:7}):"
+    git -C "$r" --no-pager log --format='  %h %s' "$last..$sha" -- infra/
+    git -C "$r" --no-pager diff --stat "$last" "$sha" -- infra/ | sed 's/^/  /'
+  else
+    echo "last installed commit ${last:0:7} isn't in origin/main's history (force push?); review all of infra/"
+  fi
+  [ "$YES" = 1 ] && return 0
+  [ -t 0 ] || die "not a terminal: re-run with -y to install without asking"
+  while :; do
+    read -rp "Install ${sha:0:7}? [y]es / [n]o / [d]iff: " ans
+    case "$ans" in
+      y|Y|yes) return 0 ;;
+      d|D)
+        if [ -n "$last" ] && [ "$last" != "$sha" ] && git -C "$r" cat-file -e "$last^{commit}" 2>/dev/null; then
+          git -C "$r" -c color.ui=always diff "$last" "$sha" -- infra/ | page
+        else
+          git -C "$r" -c color.ui=always show "$sha:infra/install.sh" | page
+        fi ;;
+      *) echo "not installed"; exit 1 ;;
+    esac
+  done
+}
+
+main() {
+  YES=0
+  case "${1:-}" in
+    -y|--yes) YES=1 ;;
+    "") ;;
+    *) echo "usage: sudo claw-install [-y]" >&2; exit 1 ;;
+  esac
+  [ "$(id -u)" = 0 ] || die "run with sudo"
+  read_token
+
+  local work r sha last=
+  work=$(mktemp -d "$WORK_BASE/claw-install.XXXXXX")
+  # shellcheck disable=SC2064  # expand $work now
+  trap "rm -rf '$work'" EXIT
+  chmod 700 "$work"
+  r=$work/repo
+  "${GIT[@]}" clone -q --no-tags --single-branch --branch main "$REPO" "$r" || die "clone of $REPO failed"
+  sha=$(git -C "$r" rev-parse HEAD)
+  if [ -f "$STATE/last" ]; then
+    last=$(head -c 40 "$STATE/last")
+    [[ "$last" =~ ^[0-9a-f]{40}$ ]] || last=
+  fi
+
+  confirm "$r" "$sha" "$last"
+
+  echo "running infra/install.sh from ${sha:0:7}"
+  # the clone stays private (its dir is 700); installed files get the usual sudo umask
+  (umask 022; CLAW_INSTALL_SHA=$sha bash "$r/infra/install.sh") || die "install.sh failed; nothing recorded"
+
+  install -d -m 755 -o root -g root "$STATE"
+  printf '%s\n' "$sha" > "$STATE/last.new" && mv -f "$STATE/last.new" "$STATE/last"
+
+  # update this bootstrap from the clone (rename, so the running copy is never rewritten in place)
+  if ! cmp -s "$r/infra/claw-install" "$SELF"; then
+    install -m 755 -o root -g root "$r/infra/claw-install" "$SELF.new" && mv -f "$SELF.new" "$SELF"
+    echo "updated $SELF"
+  fi
+  echo "installed ${sha:0:7}"
+}
+
+main "$@"

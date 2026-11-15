@@ -1,0 +1,23 @@
+# Allowlist: ignore everything, then opt in. Secrets live in .env (never committed).
+/*
+!/.gitignore
+!/README.md
+!/.github/
+!/openclaw.json
+!/workspace/
+/workspace/*
+!/workspace/*.md
+!/workspace/skills/
+!/workspace/local/
+# public skills (shared with the upstream repo; see AGENTS.md "Skills: private by default")
+!/skills/
+
+# agent-owned state: lives on disk, not in git
+workspace/USER.md
+workspace/MEMORY.md
+workspace/DREAMS.md
+workspace/memory/
+
+# infra: root-level plumbing, applied by hand with sudo claw-install (runs infra/install.sh)
+!infra/
+!infra/**

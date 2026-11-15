@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync ~/.openclaw to origin/main
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+ExecStart=/usr/local/bin/claw-sync
+# deploy + rollback can each wait up to 3 min for the gateway; never hang past the next runs
+TimeoutStartSec=15min

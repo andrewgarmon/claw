@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# agent-cal: Navi's only way to Drew's iCloud calendars. Runs as calbot via sudo; Navi never
+# sees the Apple app-specific password (which also opens iCloud Mail).
+#   agent-cal calendars                                         calendar names, JSON
+#   agent-cal events [--days N] [--calendar NAME] [--tz ZONE]   events from the start of today, JSON
+#                                                               (N 1-60, default 1: today)
+#   agent-cal create --calendar NAME --title T --start WHEN --end WHEN [--location L] [--notes N] [--tz ZONE]
+#     WHEN: 2026-11-16T12:00 (in --tz), with an offset (2026-11-16T12:00-05:00 or ...Z), or a date
+#     2026-11-16 for an all-day event (end is exclusive: a one-day event ends the next day).
+#     A second call with the same calendar, title and start creates nothing ("duplicate": true).
+#   agent-cal update --id ID [--title T] [--start WHEN] [--end WHEN] [--location L] [--notes N] [--tz ZONE]
+#     ID comes from a recent `events` listing. --start alone keeps the length; '' clears location/notes.
+#   agent-cal delete --id ID [--tz ZONE]
+#   agent-cal undo [--change cN] [--tz ZONE]     put back the last (or the named) create/update/delete
+#   agent-cal changes [--tz ZONE]                the last 10 changes, newest first
+# Only single events without attendees can be updated or deleted (no recurring series, nothing that
+# would email other people). Every change keeps a copy of the event as it was, for undo, which only
+# reverses an event's newest change (7 days max) if nobody changed it since. At most 10
+# updates+deletes, 20 creates and 20 undos per 24 hours. --tz defaults to America/New_York. No invitations.
+# Broker: infra/brokers/cal (broker.conf, test.sh); helpers in infra/lib/broker.sh.
+set -euo pipefail
+umask 077
+export PATH=/usr/local/bin:/usr/bin:/bin
+export HOME=/home/calbot
+export AGENT_CAL_STATE=$HOME/state
+# shellcheck disable=SC2034  # read by broker.sh
+BROKER=agent-cal BROKER_USER=calbot LOG=$HOME/agent-cal.log
+# shellcheck source=../../lib/broker.sh
+. /usr/local/lib/claw/broker.sh
+LIB=/usr/local/lib/claw/brokers/cal
+PY=$LIB/venv/bin/python
+DEFAULT_TZ=America/New_York
+MAX_DAYS=60 MAX_NAME=100 MAX_TITLE=200 MAX_LOCATION=200 MAX_NOTES=2000
+WHEN_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2})?(Z|[+-][0-9]{2}:[0-9]{2})?)?$'
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: agent-cal calendars
+       agent-cal events [--days N] [--calendar NAME] [--tz ZONE]
+       agent-cal create --calendar NAME --title T --start WHEN --end WHEN [--location L] [--notes N] [--tz ZONE]
+       agent-cal update --id ID [--title T] [--start WHEN] [--end WHEN] [--location L] [--notes N] [--tz ZONE]
+       agent-cal delete --id ID
+       agent-cal undo [--change cN]
+       agent-cal changes
+WHEN: 2026-11-16T12:00 (local to --tz, default America/New_York), 2026-11-16T12:00-05:00, or
+      2026-11-16 for all-day (end date exclusive). Single-quote values: --title 'Lunch w/ Sam'
+ID: from the "id" field of `events` output (single events without attendees only).
+USAGE
+  exit 1
+}
+
+broker_require_user
+
+verb=${1:-}; shift || true
+# --name value pairs into opt[name]; only the options the verb allows, each at most once
+declare -A opt=()
+parse_opts() {  # parse_opts "<allowed names>" args...
+  local allowed=" $1 " name; shift
+  while [ $# -gt 0 ]; do
+    [[ "$1" == --* ]] || die "unexpected argument: ${1:0:40} (values go after an option, e.g. --title 'x')"
+    name=${1#--}
+    [[ "$allowed" == *" $name "* ]] || die "unknown option for $verb: --${name:0:30}"
+    [ -z "${opt[$name]+set}" ] || die "--$name given twice"
+    [ $# -ge 2 ] || die "--$name needs a value"
+    opt[$name]=$2; shift 2
+  done
+}
+tz_arg() {
+  local tz=${opt[tz]-$DEFAULT_TZ}
+  [[ "$tz" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+){0,2}$ ]] && [ ${#tz} -le 40 ] || die "bad --tz: ${tz:0:40}"
+  echo "$tz"
+}
+cal_arg() {  # cal_arg <required 0|1>
+  local c=${opt[calendar]:-}
+  if [ -z "$c" ]; then [ "$1" = 1 ] && die "--calendar is required"; echo ""; return; fi
+  broker_valid_line $MAX_NAME "$c" || die "bad --calendar (max $MAX_NAME chars, no control characters)"
+  echo "$c"
+}
+
+id_arg() {
+  local i=${opt[id]:-}
+  [[ "$i" =~ ^[0-9a-f]{10}$ ]] || die "--id is required: the 10-character id from events output (got: ${i:0:20})"
+  echo "$i"
+}
+text_opts() {  # text_opts: check --title/--location/--notes if given (title must be non-empty)
+  if [ -n "${opt[title]+set}" ]; then
+    broker_valid_line $MAX_TITLE "${opt[title]}" || die "--title must be 1-$MAX_TITLE chars, one line"
+  fi
+  if [ -n "${opt[location]:-}" ]; then
+    broker_valid_line $MAX_LOCATION "${opt[location]}" || die "bad --location (max $MAX_LOCATION chars, one line)"
+  fi
+  local notes=${opt[notes]:-}
+  [ ${#notes} -le $MAX_NOTES ] || die "--notes too long (max $MAX_NOTES)"
+  [[ "${notes//$'\n'/}" != *[[:cntrl:]]* ]] || die "--notes has control characters (newlines are fine)"
+}
+
+case "$verb" in
+  calendars)
+    [ $# -eq 0 ] || die "calendars takes no arguments"
+    args=(calendars)
+    log "CALENDARS"
+    ;;
+  events)
+    parse_opts "days calendar tz" "$@"
+    days=${opt[days]-1}
+    [[ "$days" =~ ^[0-9]{1,2}$ ]] && [ "$days" -ge 1 ] && [ "$days" -le $MAX_DAYS ] || die "--days must be 1-$MAX_DAYS"
+    tz=$(tz_arg); cal=$(cal_arg 0)
+    args=(events "$tz" "$days" "$cal")
+    log "EVENTS days=$days cal=${cal:-all} tz=$tz"
+    ;;
+  create)
+    parse_opts "calendar title start end location notes tz" "$@"
+    tz=$(tz_arg); cal=$(cal_arg 1)
+    title=${opt[title]:-} start=${opt[start]:-} end=${opt[end]:-} location=${opt[location]:-} notes=${opt[notes]:-}
+    broker_valid_line $MAX_TITLE "$title" || die "--title is required (max $MAX_TITLE chars, one line)"
+    for w in "$start" "$end"; do
+      [[ "$w" =~ $WHEN_RE ]] || die "--start and --end are required, like 2026-11-16T12:00 or 2026-11-16 (got: ${w:0:40})"
+    done
+    [ "${#start}" -eq 10 ] && [ "${#end}" -ne 10 ] && die "start and end must both be dates (all-day) or both times"
+    [ "${#start}" -ne 10 ] && [ "${#end}" -eq 10 ] && die "start and end must both be dates (all-day) or both times"
+    [ -z "$location" ] || broker_valid_line $MAX_LOCATION "$location" || die "bad --location (max $MAX_LOCATION chars, one line)"
+    [ ${#notes} -le $MAX_NOTES ] || die "--notes too long (max $MAX_NOTES)"
+    [[ "${notes//$'\n'/}" != *[[:cntrl:]]* ]] || die "--notes has control characters (newlines are fine)"
+    args=(create "$tz" "$cal" "$title" "$start" "$end" "$location" "$notes")
+    log "CREATE cal=$cal start=$start end=$end tz=$tz"
+    ;;
+  update)
+    parse_opts "id title start end location notes tz" "$@"
+    tz=$(tz_arg); id=$(id_arg)
+    text_opts
+    fields=()
+    for f in title start end location notes; do [ -n "${opt[$f]+set}" ] && fields+=("$f"); done
+    [ ${#fields[@]} -gt 0 ] || die "nothing to change: give at least one of --title --start --end --location --notes"
+    for f in start end; do
+      [ -z "${opt[$f]+set}" ] || [[ "${opt[$f]}" =~ $WHEN_RE ]] || die "bad --$f, like 2026-11-16T12:00 or 2026-11-16 (got: ${opt[$f]:0:40})"
+    done
+    if [ -n "${opt[start]+set}" ] && [ -n "${opt[end]+set}" ]; then
+      a=0 b=0; [ ${#opt[start]} -eq 10 ] && a=1; [ ${#opt[end]} -eq 10 ] && b=1
+      [ $a = $b ] || die "start and end must both be dates (all-day) or both times"
+    fi
+    joined=$(IFS=,; echo "${fields[*]}")
+    args=(update "$tz" "$id" "$joined" "${opt[title]:-}" "${opt[start]:-}" "${opt[end]:-}" "${opt[location]:-}" "${opt[notes]:-}")
+    log "UPDATE id=$id fields=$joined start=${opt[start]:-} end=${opt[end]:-}"
+    ;;
+  delete)
+    parse_opts "id tz" "$@"
+    tz=$(tz_arg); id=$(id_arg)
+    args=(delete "$tz" "$id")
+    log "DELETE id=$id"
+    ;;
+  undo)
+    parse_opts "change tz" "$@"
+    tz=$(tz_arg); change=${opt[change]-}
+    [ -z "${opt[change]+set}" ] || [[ "$change" =~ ^c[1-9][0-9]{0,6}$ ]] || die "--change must look like c12 (see: agent-cal changes)"
+    args=(undo "$tz" "$change")
+    log "UNDO change=${change:-last}"
+    ;;
+  changes)
+    parse_opts "tz" "$@"
+    tz=$(tz_arg)
+    args=(changes "$tz")
+    log "CHANGES"
+    ;;
+  *) usage ;;
+esac
+
+broker_secret_env "$HOME/.config/caldav.env" APPLE_ID APPLE_APP_PASSWORD 'CALDAV_URL?'
+[ -x "$PY" ] || die "venv missing at $LIB/venv (run sudo claw-install)"
+cd "$HOME"
+exec "$PY" -I "$LIB/agent_cal.py" "${args[@]}"

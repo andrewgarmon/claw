@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up Navi's agent-owned state to the claw-state repo
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+ExecStart=/usr/local/bin/claw-backup

@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# claw-sync: make ~/.openclaw match origin/main. Runs as openclaw from a root-owned systemd timer.
+# - reverts local drift in tracked files (untracked/ignored state is left alone)
+# - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
+# - invalid openclaw.json: not deployed (rolled back before any restart)
+# - gateway not healthy after a restart: rolls back to the last commit it was healthy on and restarts again
+# - either way the commit is marked bad and skipped until main moves, except: a known-good commit
+#   (drift revert) is never marked bad, and if the rollback doesn't recover either, nothing is marked bad
+# - a pending marker is written before a config change touches the tree; a run killed mid-deploy is
+#   resumed next run (re-validated, restarted, health-checked, rolled back if needed)
+# - while main is marked bad, local drift is still reverted (to the last good commit)
+# - good/pending from the state dir are only trusted if they are on origin/main (the agent can write them)
+# - a git fetch failure only fail-pings after 3 in a row; until then it syncs against the last fetch
+# - every run checks gateway health and pings HEALTHCHECKS_PING_URL (from ~/.openclaw/.env) if set:
+#   success when synced + healthy, /fail otherwise. No pings at all = claw-sync or the host is down.
+set -eEuo pipefail
+export HOME=${CLAW_SYNC_HOME:-/home/openclaw}   # override only for tests
+export PATH=$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+XDG_RUNTIME_DIR=/run/user/$(id -u); export XDG_RUNTIME_DIR
+STATE=$HOME/.cache/claw-sync; mkdir -p "$STATE"
+HEALTH_WAIT=${CLAW_SYNC_HEALTH_WAIT:-180}       # seconds to wait for the gateway after a restart
+IDLE_WAIT=${CLAW_SYNC_IDLE_WAIT:-60}            # ... when nothing was restarted (e.g. still booting)
+exec 9>"$STATE/lock"; flock -n 9 || exit 0
+cd "$HOME/.openclaw"
+
+HC=${HEALTHCHECKS_PING_URL:-}
+[ -n "$HC" ] || [ ! -r .env ] || HC=$(sed -n 's/^HEALTHCHECKS_PING_URL=//p' .env | tail -n1 | tr -d "\"' \r")
+hc() {  # hc [fail] message
+  local path=""; [ "$1" = fail ] && { path=/fail; shift; }
+  [ -n "$HC" ] || return 0
+  curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$*" "$HC$path" || echo "healthcheck ping failed" >&2
+}
+die() { echo "$*" >&2; hc fail "$*"; exit 1; }
+trap 'hc fail "claw-sync crashed at line $LINENO"' ERR
+target="" bad="" want=""
+ok() {  # success ping, but keep failing while origin/main is marked bad
+  [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
+  hc "$*"; exit 0
+}
+
+healthy() {  # wait up to $1 seconds for the gateway to be active and answering health RPCs
+  local deadline=$((SECONDS + $1))
+  while :; do
+    systemctl --user is-active -q openclaw-gateway && openclaw gateway health --timeout 10000 >/dev/null 2>&1 && return 0
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 5
+  done
+}
+cfg_hash() { sha256sum openclaw.json | cut -d' ' -f1; }
+validate() {
+  local out
+  out=$(openclaw config validate 2>&1) && return 0
+  printf '%s\n' "$out" | grep -v '^\[openclaw\] ' >&2
+  return 1
+}
+restart() { systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2; }
+
+# The state dir is writable by openclaw (the agent's user), so only trust commits that are on main:
+# otherwise a forged good/pending would make claw-sync reset onto an unreviewed local commit.
+on_main() { git merge-base --is-ancestor "$1" origin/main 2>/dev/null; }
+
+# Last commit the gateway was seen healthy on; rollback target if a deploy breaks it.
+before=$(git rev-parse HEAD)
+good=$(cat "$STATE/good" 2>/dev/null || true)
+on_main "${good:-x}" || good=$before
+on_main "$good" || good=""
+
+# Roll back from $1 to $good. Marks $1 bad first, so an interrupted rollback is still skipped later.
+rollback() {
+  local t=$1
+  echo "$t" > "$STATE/bad"
+  [ -n "$good" ] || { rm -f "$STATE/pending"; die "deploy of ${t:0:7} failed and there is no known-good commit on main to roll back to"; }
+  git reset -q --hard "$good"
+  restart
+  if ! healthy "$HEALTH_WAIT"; then
+    # the known-good config doesn't come up either: the outage isn't this commit's fault
+    rm -f "$STATE/bad" "$STATE/pending"
+    die "deploy of ${t:0:7} broke the gateway and rollback to ${good:0:7} did NOT recover it (${t:0:7} not marked bad; retried next run)"
+  fi
+  rm -f "$STATE/pending"
+  die "deploy of ${t:0:7} broke the gateway; rolled back to ${good:0:7} and gateway is healthy again"
+}
+# Gateway was just restarted into $1 (the checked-out HEAD): wait for health, roll back if it fails.
+finish_deploy() {
+  local t=$1
+  if healthy "$HEALTH_WAIT"; then
+    echo "$t" > "$STATE/good"; rm -f "$STATE/pending"
+    ok "deployed ${t:0:7} (config changed), gateway healthy"
+  fi
+  if [ "$t" = "$good" ]; then   # e.g. drift revert: this config is already known good, so don't blame it
+    rm -f "$STATE/pending"
+    die "gateway not healthy ${HEALTH_WAIT}s after restarting known-good ${t:0:7}; not marking it bad, checking again next run"
+  fi
+  echo "gateway not healthy ${HEALTH_WAIT}s after deploying ${t:0:7}; rolling back to ${good:0:7}" >&2
+  rollback "$t"
+}
+
+# A previous run was killed (reboot, OOM, timeout) between restarting the gateway and finishing its check.
+# It may have died before validating or restarting, so re-validate and restart before the health check.
+pending=$(cat "$STATE/pending" 2>/dev/null || true)
+if [ -n "$pending" ] && ! on_main "$pending"; then
+  echo "ignoring pending marker ${pending:0:7}: not on origin/main" >&2
+  rm -f "$STATE/pending"; pending=""
+fi
+if [ -n "$pending" ]; then
+  echo "previous run was interrupted while deploying ${pending:0:7}; resuming it" >&2
+  if [ "$before" = "$pending" ]; then
+    if ! validate; then
+      echo "INVALID openclaw.json at ${pending:0:7}" >&2
+      rollback "$pending"
+    fi
+    restart
+    finish_deploy "$pending"
+  fi
+  rollback "$pending"   # HEAD already moved off it: the rollback itself was interrupted, redo it
+fi
+
+if git fetch -q origin main; then
+  rm -f "$STATE/fetch-fails"
+else
+  n=$(( $(cat "$STATE/fetch-fails" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$STATE/fetch-fails"
+  [ "$n" -lt 3 ] || die "git fetch failed $n runs in a row"
+  echo "git fetch failed ($n in a row); syncing against the last fetched origin/main" >&2
+fi
+target=$(git rev-parse origin/main)
+bad=$(cat "$STATE/bad" 2>/dev/null || true)
+
+# What this run makes ~/.openclaw match: origin/main, or the last good commit while main is marked bad
+# (so local drift is still reverted then).
+want=$target
+if [ "$target" = "$bad" ]; then
+  want=$good
+  [ -n "$want" ] || die "origin/main ${target:0:7} is marked bad and there is no known-good commit on main"
+fi
+
+# Nothing to deploy: just report health.
+if [ "$before" = "$want" ] && git diff --quiet HEAD; then
+  healthy "$IDLE_WAIT" || die "gateway not healthy at ${before:0:7} (no deploy this run)"
+  echo "$before" > "$STATE/good"
+  ok "up to date at ${before:0:7}, gateway healthy"
+fi
+
+cfg_before=$(cfg_hash)
+cfg_new=$(git show "$want:openclaw.json" | sha256sum | cut -d' ' -f1)
+# Mark the deploy pending before the tree changes, so a run killed during validate/restart is resumed.
+[ "$cfg_new" = "$cfg_before" ] || echo "$want" > "$STATE/pending"
+[ "$before" = "$want" ] && echo "reverting local drift: $(git diff --name-only HEAD | tr '\n' ' ')"
+git checkout -q main 2>/dev/null || true
+git reset -q --hard "$want"
+echo "synced ${before:0:7} -> ${want:0:7}"
+
+if [ "$cfg_new" = "$cfg_before" ]; then
+  healthy "$IDLE_WAIT" || die "synced ${want:0:7} (no config change) but gateway not healthy"
+  echo "$want" > "$STATE/good"
+  ok "synced ${before:0:7} -> ${want:0:7}, gateway healthy"
+fi
+
+if ! validate; then
+  git reset -q --hard "$before"
+  echo "$want" > "$STATE/bad"; rm -f "$STATE/pending"
+  die "INVALID openclaw.json at ${want:0:7}; rolled back to ${before:0:7}, gateway not restarted"
+fi
+
+restart
+echo "openclaw.json changed: gateway restarted"
+finish_deploy "$want"

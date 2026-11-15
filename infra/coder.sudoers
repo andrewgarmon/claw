@@ -1,0 +1,2 @@
+Defaults!/usr/local/bin/coder-acp env_reset, !setenv
+openclaw ALL=(coder) NOPASSWD: /usr/local/bin/coder-acp

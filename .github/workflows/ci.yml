@@ -1,0 +1,114 @@
+name: CI
+# Cheap guardrails for this config repo. Merges to main deploy to the host within ~5 min,
+# so these catch the mistakes that would take Navi down or leak something.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  config:
+    name: openclaw.json validates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install the OpenClaw version the config was last written by
+        run: |
+          v=$(jq -r '.meta.lastTouchedVersion // "latest"' openclaw.json)
+          echo "openclaw@$v"
+          npm install -g --no-fund --no-audit "openclaw@$v"
+      - name: Validate
+        env:
+          OPENCLAW_CONFIG_PATH: ${{ github.workspace }}/openclaw.json
+          OPENCLAW_CONFIG_READONLY: "1"
+          # dummy values so ${VAR} references resolve; real secrets live in ~/.openclaw/.env on the droplet
+          OPENCLAW_GATEWAY_TOKEN: ci-dummy
+          TELEGRAM_ALLOW_FROM: "0"
+        run: |
+          OPENCLAW_STATE_DIR="$(mktemp -d)"; export OPENCLAW_STATE_DIR
+          # "plugin not installed" warnings are expected here (plugins live on the droplet); only errors fail
+          openclaw config validate
+
+  secrets:
+    name: no secrets committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # scan full history: a secret added then removed in a PR still lands in main via the merge
+      - name: gitleaks
+        env:
+          GL_VERSION: 8.28.0
+          GL_SHA256: a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb
+        run: |
+          curl -sSfL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_x64.tar.gz"
+          echo "${GL_SHA256}  gl.tgz" | sha256sum -c -
+          tar xzf gl.tgz gitleaks && rm gl.tgz
+          ./gitleaks git . --no-banner --redact
+
+  state-files:
+    name: agent state stays out of git
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check
+        run: |
+          fail=0
+          # 1. never tracked
+          tracked=$(git ls-files | grep -E '^(workspace/(USER|MEMORY|DREAMS)\.md|workspace/memory/|\.env)' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::agent state or secrets are tracked: $tracked"; fail=1
+          fi
+          # 2. still gitignored (catches someone deleting the .gitignore lines)
+          for p in workspace/USER.md workspace/MEMORY.md workspace/DREAMS.md workspace/memory/x.md .env; do
+            git check-ignore -q --no-index "$p" || { echo "::error::$p is no longer gitignored"; fail=1; }
+          done
+          [ "$fail" = 0 ] && echo "ok"
+          exit "$fail"
+
+  shellcheck:
+    name: shell scripts lint clean
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          # every tracked file with a sh/bash shebang (infra/ now, gates/ later)
+          mapfile -t files < <(git ls-files | while read -r f; do head -c 64 "$f" 2>/dev/null | head -1 | grep -qE '^#!.*\b(ba)?sh\b' && echo "$f"; done)
+          printf '%s\n' "${files[@]}"
+          shellcheck --version | head -2
+          shellcheck --severity=warning "${files[@]}"
+
+  infra-tests:
+    name: infra tests pass
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run
+        # Every infra/tests/*.test.sh and infra/brokers/*/test.sh, so adding a test needs no
+        # workflow edit. Each fakes what it needs (origin, gh, systemctl, ...) in a temp dir.
+        run: |
+          shopt -s nullglob
+          fail=0
+          for t in infra/tests/*.test.sh infra/brokers/*/test.sh; do
+            echo "::group::$t"
+            bash "$t" || { echo "::error::$t failed"; fail=1; }
+            echo "::endgroup::"
+          done
+          exit "$fail"

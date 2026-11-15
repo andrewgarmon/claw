@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# claw-backup: snapshot Navi's agent-owned state into the private claw-state repo.
+# Runs as openclaw from a root-owned systemd timer (nightly).
+# - copies USER.md, MEMORY.md, DREAMS.md and memory/** from the workspace into a local
+#   git repo (~/.openclaw/state-backup, ignored by claw-config, left alone by claw-sync)
+# - commits only when something changed, so the history is one commit per day with changes
+# - publishes through agent-git like any other agent push: branch navi/state/<host>,
+#   with one long-lived PR on claw-state that it keeps updating. Nothing needs merging.
+set -euo pipefail
+export HOME=/home/openclaw
+export PATH=/usr/local/bin:/usr/bin:/bin
+WS=$HOME/.openclaw/workspace
+REPO=$HOME/.openclaw/state-backup
+ITEMS=(USER.md MEMORY.md DREAMS.md memory)
+host=$(hostname -s | tr -c 'A-Za-z0-9._\n-' '-')
+BRANCH=navi/state/$host
+STATE=$HOME/.cache/claw-backup; mkdir -p "$STATE"
+exec 9>"$STATE/lock"; flock -n 9 || exit 0
+
+[ -d "$WS" ] || { echo "no workspace at $WS" >&2; exit 1; }
+gd() { git -C "$1" -c user.name=Navi -c user.email=navi@claw.invalid -c core.hooksPath=/dev/null "${@:2}"; }
+g() { gd "$REPO" "$@"; }
+# claw-state's main is GitHub's "Initial commit". History must start from it or GitHub
+# refuses the PR ("no history in common"); openclaw can't read claw-state, so it ships here.
+ROOT_BUNDLE=$HOME/.openclaw/infra/claw-state-root.bundle
+ROOT_SHA=f017bb7e450c199d37694560047656a79901c6b8
+if [ ! -d "$REPO/.git" ]; then
+  # build in a scratch dir and move it into place, so a failed init is retried next run
+  tmp=$REPO.new; rm -rf "$tmp"
+  git init -q -b "$BRANCH" "$tmp"
+  gd "$tmp" fetch -q "$ROOT_BUNDLE" refs/remotes/origin/main
+  gd "$tmp" reset -q --hard "$ROOT_SHA"
+  printf '# claw-state (%s)\n\nNightly snapshot of Navi'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config.\n' \
+    "$host" "$host" "$WS" > "$tmp/README.md"
+  mv -T "$tmp" "$REPO"
+fi
+# the branch follows the current hostname, so after a move to a new name history continues there
+g checkout -q -B "$BRANCH"
+
+# mirror: whatever is in the workspace now, including deletions
+for item in "${ITEMS[@]}"; do
+  rm -rf "${REPO:?}/$item"
+  [ -e "$WS/$item" ] && cp -a "$WS/$item" "$REPO/$item"
+done
+find "$REPO/memory" -mindepth 1 -name .git -prune -exec rm -rf {} + 2>/dev/null || true
+
+g add -A
+if ! g diff --cached --quiet; then
+  g commit -q -m "state backup $(date -I)"
+  echo "committed $(g rev-parse --short HEAD): $(g show --stat --format= HEAD | tail -1)"
+fi
+
+head=$(g rev-parse HEAD)
+if [ "$BRANCH $head" = "$(cat "$STATE/pushed" 2>/dev/null)" ]; then echo "nothing new to push"; exit 0; fi
+# agent-git reads the PR body from stdin, followed by the bundle
+url=$({ printf '%s\n' "Nightly snapshot of USER.md, MEMORY.md, DREAMS.md and memory/ from $host, pushed by infra/claw-backup (claw-config). The branch is the backup; this PR stays open and gets updated each night. No need to merge it."
+        g bundle create -q - "$BRANCH"; } | sudo -n -u gitbot /usr/local/bin/agent-git pr claw-state "$BRANCH" "State backup: $host")
+echo "$BRANCH $head" > "$STATE/pushed"
+echo "pushed ${head:0:7} to $BRANCH: $url"

@@ -1,0 +1,17 @@
+# local/AGENTS.md - This Install
+
+Rules and notes for this install only. Copy this file to `workspace/local/AGENTS.md` and fill it in. Keep that copy private: it never goes in a public repo. OpenClaw's `bootstrap-extra-files` hook (see `openclaw.json`) loads it right after `AGENTS.md`; where it's more specific, follow it. `AGENTS.md` is shared and stays free of personal details. Facts about your human go in `USER.md`.
+
+## Daily briefing
+- The scheduled job is `<cron job name>`, set for <HH:MM> <IANA time zone>.
+- Calendar: today's events come from <a skill or command>, or "no calendar".
+- Extra sections, if any: <section name>, after <section>: <what goes in it>.
+
+## GitHub issue labels
+Labels must come from: <comma-separated list; agent-git only allows labels on its own allowlist>.
+
+## Upstream repo
+<owner>/<repo>, or "none". With one, shared files are the ones that also exist there (AGENTS.md: Shared files and the upstream repo).
+
+## Local notes
+Camera names, SSH hosts and users, preferred voices and speakers, device nicknames.

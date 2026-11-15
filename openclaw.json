@@ -1,0 +1,248 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/openclaw/.openclaw/workspace",
+      "models": {
+        "google/gemini-4-argon": {},
+        "google/gemini-4-hydrogen": {},
+        "google/gemini-3.8-flash": {}
+      },
+      "model": {
+        "primary": "google/gemini-4-hydrogen@google:setup-101632ab-39a7-4fb0-b049-a2a4b78cb644",
+        "fallbacks": [
+          "google/gemini-3.8-flash@google:setup-101632ab-39a7-4fb0-b049-a2a4b78cb644"
+        ]
+      },
+      "thinkingDefault": "medium",
+      "heartbeat": {
+        "every": "0m"
+      }
+    },
+    "entries": {
+      "main": {
+        "name": "main",
+        "workspace": "/home/openclaw/.openclaw/workspace",
+        "agentDir": "/home/openclaw/.openclaw/agents/main/agent",
+        "identity": {
+          "name": "Navi",
+          "emoji": "🧚",
+          "theme": "Sharp, curious, and quick on my feet — here to illuminate the path and keep things moving."
+        }
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "google": {
+        "models": [
+          {
+            "id": "gemini-3.8-flash",
+            "name": "Gemini 3.8 Flash",
+            "cost": {
+              "input": 1.5,
+              "output": 7.5,
+              "cacheRead": 0.15,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "gemini-4-argon",
+            "name": "Gemini 4 Argon",
+            "cost": {
+              "input": 4,
+              "output": 20,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "gemini-4-hydrogen",
+            "name": "Gemini 4 Hydrogen",
+            "cost": {
+              "input": 1.5,
+              "output": 7.5,
+              "cacheRead": 0.075,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "entries": {
+      "anthropic": {
+        "config": {
+          "sessionCatalog": {
+            "enabled": false
+          }
+        }
+      },
+      "codex": {
+        "config": {
+          "sessionCatalog": {
+            "enabled": false
+          }
+        }
+      },
+      "google": {
+        "enabled": true
+      },
+      "duckduckgo": {
+        "enabled": true
+      },
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "permissionMode": "approve-all",
+          "nonInteractivePermissions": "fail",
+          "probeAgent": "claude",
+          "timeoutSeconds": 180,
+          "agents": {
+            "claude": {
+              "command": "sudo",
+              "args": [
+                "-n",
+                "-u",
+                "coder",
+                "/usr/local/bin/coder-acp"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true,
+      "utilityModelSeparation": true
+    },
+    "lastTouchedVersion": "2026.11.3"
+  },
+  "wizard": {
+    "securityAcknowledgedAt": "2026-11-11T02:42:30.674Z",
+    "lastRunAt": "2026-11-11T02:49:56.139Z",
+    "lastRunVersion": "2026.11.3",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "telemetry": {
+    "enabled": false,
+    "consentedAt": "2026-11-11T02:42:33.109Z"
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "tailscale": {
+      "mode": "off"
+    }
+  },
+  "tools": {
+    "profile": "coding",
+    "alsoAllow": [
+      "message",
+      "pdf"
+    ],
+    "deny": [
+      "image_generate",
+      "music_generate",
+      "video_generate",
+      "theme",
+      "dashboard",
+      "terminal",
+      "portal",
+      "presence",
+      "heartbeat_respond",
+      "plugins",
+      "secrets"
+    ],
+    "web": {
+      "search": {
+        "provider": "duckduckgo",
+        "enabled": true
+      }
+    }
+  },
+  "skills": {
+    "allowBundled": [
+      "github",
+      "gh-issues"
+    ],
+    "entries": {
+      "add-model-provider": {
+        "enabled": false
+      },
+      "browser-automation": {
+        "enabled": false
+      },
+      "canvas": {
+        "enabled": false
+      },
+      "cloud-image-bake": {
+        "enabled": false
+      },
+      "configure-channel": {
+        "enabled": false
+      },
+      "diagnose-gateway": {
+        "enabled": false
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "google:default": {
+        "provider": "google",
+        "mode": "api_key"
+      },
+      "google:setup-101632ab-39a7-4fb0-b049-a2a4b78cb644": {
+        "provider": "google",
+        "mode": "api_key"
+      }
+    }
+  },
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": true
+        },
+        "bootstrap-extra-files": {
+          "enabled": true,
+          "paths": [
+            "local/AGENTS.md"
+          ]
+        }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "${TELEGRAM_ALLOW_FROM}"
+      ],
+      "groupPolicy": "allowlist"
+    }
+  },
+  "commands": {
+    "ownerAllowFrom": [
+      "telegram:${TELEGRAM_ALLOW_FROM}"
+    ]
+  },
+  "acp": {
+    "enabled": true,
+    "backend": "acpx",
+    "defaultAgent": "claude",
+    "allowedAgents": [
+      "claude"
+    ]
+  }
+}
