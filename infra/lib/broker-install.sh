@@ -23,6 +23,7 @@
 # Tests point this at a scratch dir; install.sh unsets it, so on the host every path is absolute.
 BROKER_ROOT=${BROKER_ROOT:-}
 BROKER_CALLERS_ALLOWED="openclaw coder"
+# "drew" is this host's admin user; a fork puts its own (SETUP.md, step 1)
 BROKER_USERS_RESERVED="root drew openclaw coder"
 
 # broker_conf <dir>: parse and validate <dir>/broker.conf into B_NAME B_USER B_CALLERS B_SECRET
@@ -166,7 +167,7 @@ broker_install() {
 # broker_prune <brokers dir>: for each generated /etc/sudoers.d/agent-<name> whose broker dir is
 # gone (removed or renamed in git), remove that grant, its wrapper and its lib dir, so a sudo grant
 # never outlives its config. Only touches files carrying the generated header. The user and its
-# secret are left alone (deleting a secret is drew's call).
+# secret are left alone (deleting a secret is the admin's call).
 broker_prune() {
   local brokers=${1%/} R=$BROKER_ROOT f name
   for f in "$R"/etc/sudoers.d/agent-*; do

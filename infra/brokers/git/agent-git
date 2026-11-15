@@ -25,7 +25,7 @@
 # coder-only, and before anything is written the text that would go public (PR commits and diffs,
 # branch name, titles, bodies, comments) is checked against ~/.config/redact.txt and gitleaks.
 # A hit is refused and logged without the matched text. Reads stay open to every caller.
-# new-repo always creates private repos; making one public is drew's call.
+# new-repo always creates private repos; making one public is the owner's call.
 # Broker: infra/brokers/git (broker.conf, test.sh); helpers in infra/lib/broker.sh.
 set -euo pipefail
 umask 077

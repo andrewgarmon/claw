@@ -9,7 +9,7 @@
 #
 # Installed root-owned to /usr/local/sbin/claw-install (it updates itself from the clone after
 # each install). First install: see infra/README.md ("Applying infra").
-# Usage (as drew): sudo claw-install [-y]
+# Usage (as the admin user): sudo claw-install [-y]
 set -euo pipefail
 umask 077
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

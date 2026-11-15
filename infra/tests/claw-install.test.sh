@@ -56,7 +56,7 @@ cp "$INFRA/claw-install" "$T/dev/infra/claw-install"
 git -C "$T/dev" add -A && git -C "$T/dev" commit -qm "infra v1" && git -C "$T/dev" push -q origin main 2>/dev/null
 sha1=$(git -C "$T/dev" rev-parse HEAD)
 
-# the agent-writable checkout (what drew used to run install.sh from), tampered with locally
+# the agent-writable checkout (what the admin used to run install.sh from), tampered with locally
 git clone -q "$T/origin.git" "$T/openclaw-checkout"
 echo 'echo EVIL >> '"$T/installed" >> "$T/openclaw-checkout/infra/install.sh"
 
