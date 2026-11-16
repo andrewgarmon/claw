@@ -43,7 +43,7 @@ usage: agent-cal calendars
        agent-cal undo [--change cN]
        agent-cal changes
 WHEN: 2026-11-16T12:00 (local to --tz, default America/New_York), 2026-11-16T12:00-05:00, or
-      2026-11-16 for all-day (end date exclusive). Single-quote values: --title 'Lunch w/ Sam'
+      2026-11-16 for all-day (end date exclusive). Single-quote values: --title 'Lunch w/ Alex'
 ID: from the "id" field of `events` output (single events without attendees only).
 USAGE
   exit 1

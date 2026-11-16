@@ -62,11 +62,11 @@ check "events: --days 60, --calendar, --tz" eval '[ $rc = 0 ] && args_are events
 run events --tz UTC
 check "events: --tz UTC" eval '[ $rc = 0 ] && args_are events UTC 1 ""'
 
-run create --calendar Home --title "Lunch w/ Sam" --start 2026-11-16T12:00 --end 2026-11-16T13:00
-check "create: timed" eval '[ $rc = 0 ] && args_are create America/New_York Home "Lunch w/ Sam" 2026-11-16T12:00 2026-11-16T13:00 "" "" && logged "CREATE cal=Home start=2026-11-16T12:00"'
-run create --title "Trip" --calendar Home --start 2026-11-20 --end 2026-11-23 --location "Erie, PA" --notes "$(printf 'pack\nwaders')"
+run create --calendar Home --title "Lunch w/ Alex" --start 2026-11-16T12:00 --end 2026-11-16T13:00
+check "create: timed" eval '[ $rc = 0 ] && args_are create America/New_York Home "Lunch w/ Alex" 2026-11-16T12:00 2026-11-16T13:00 "" "" && logged "CREATE cal=Home start=2026-11-16T12:00"'
+run create --title "Trip" --calendar Home --start 2026-11-20 --end 2026-11-23 --location "Springfield" --notes "$(printf 'pack\nwaders')"
 check "create: all-day, any option order, location, multi-line notes" \
-  eval '[ $rc = 0 ] && args_are create America/New_York Home Trip 2026-11-20 2026-11-23 "Erie, PA" "$(printf "pack\nwaders")"'
+  eval '[ $rc = 0 ] && args_are create America/New_York Home Trip 2026-11-20 2026-11-23 "Springfield" "$(printf "pack\nwaders")"'
 run create --calendar Home --title "Call" --start 2026-11-16T12:00:00-05:00 --end 2026-11-16T17:30:00Z --tz America/Chicago
 check "create: offsets, Z and seconds" eval '[ $rc = 0 ] && args_are create America/Chicago Home Call 2026-11-16T12:00:00-05:00 2026-11-16T17:30:00Z "" ""'
 # shellcheck disable=SC2016
@@ -143,7 +143,7 @@ run create "${ok_create[@]}" --notes "$(printf 'a\033[31mb')"
 check "create: escape sequence in notes" eval 'denied "control characters"'
 run create "${ok_create[@]}" --notes "$(printf 'n%.0s' {1..2001})"
 check "create: notes too long" eval 'denied "--notes too long"'
-run create "${ok_create[@]}" --attendee sam@example.com
+run create "${ok_create[@]}" --attendee alex@example.com
 check "create: no invitations" eval 'denied "unknown option for create"'
 
 for i in "" 0123abcde 0123abcdeff 0123ABCDEF "0123abcde;" "../x" "Dentist"; do
