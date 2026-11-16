@@ -53,10 +53,11 @@ esac
 EOF
 # fake git: logs calls, everything succeeds. log -p prints \$H/diffs, log --name-only \$H/paths,
 # cat-file \$H/commits (raw commit objects), rev-list --merges \$H/merges (what the branch would push).
+# push fails like GitHub's non-fast-forward rejection while \$H/push_reject exists.
 cat > "$BIN/git" <<EOF
 #!/bin/bash
 printf '[%s]' "\$@" >> "$H/git.log"; echo >> "$H/git.log"
-case " \$* " in *" rev-parse "*) echo deadbeef ;; *" init "*) mkdir -p "\${!#}" ;; *" bundle verify "*) cp "\${!#}" "$H/bundle" ;; *" rev-list --merges "*) cat "$H/merges" 2>/dev/null ;; *" rev-list "*) echo deadbeef ;; *" cat-file "*) cat "$H/commits" ;; *" log -p "*) cat "$H/diffs" ;; *" --name-only "*) cat "$H/paths" ;; esac
+case " \$* " in *" push "*) [ -e "$H/push_reject" ] && { printf 'To x\n!\t%s\t[rejected] (non-fast-forward)\nDone\n' "\${!#}"; exit 1; } ;; *" rev-parse "*) echo deadbeef ;; *" init "*) mkdir -p "\${!#}" ;; *" bundle verify "*) cp "\${!#}" "$H/bundle" ;; *" rev-list --merges "*) cat "$H/merges" 2>/dev/null ;; *" rev-list "*) echo deadbeef ;; *" cat-file "*) cat "$H/commits" ;; *" log -p "*) cat "$H/diffs" ;; *" --name-only "*) cat "$H/paths" ;; esac
 exit 0
 EOF
 # fake gitleaks: flags ghp_ tokens like the real rule, skips lines marked gitleaks:allow like the
@@ -424,6 +425,41 @@ SUDO_USER=openclaw run pr claw-config claude/x "t"
 check "private repo: openclaw pr pushed without checks (unchanged)" eval '[ $rc = 0 ] && pushed && ! grep -qF "refs/base" "$H/git.log" && [ ! -s "$H/gitleaks.log" ]'
 run new-repo another
 check "new-repo: still private only" eval '[ $rc = 0 ] && called "[repo][create][andrewgarmon/another][--private]"'
+
+# ---------- state backups ----------
+STATE_BUNDLE=$(printf '# v2 git bundle\ndeadbeef refs/heads/agent/state/claw\n\n\001\002PACK')
+force_pushed() { grep -qF "[+refs/agent/$1:refs/heads/$1]" "$H/git.log"; }
+plain_pushed() { grep -qF "[refs/agent/$1:refs/heads/$1]" "$H/git.log"; }
+
+stdin "$STATE_BUNDLE"
+SUDO_USER=openclaw run pr claw-state agent/state/claw "State backup: claw"
+check "state: openclaw fast-forward push goes through, without force" \
+  eval '[ $rc = 0 ] && plain_pushed agent/state/claw && ! force_pushed agent/state/claw && called "[pr][create]" && logged "PUSH claw-state agent/state/claw"'
+
+touch "$H/push_reject"
+stdin "$STATE_BUNDLE"
+SUDO_USER=openclaw run pr claw-state agent/state/claw "State backup: claw"
+check "state: non-fast-forward refused, logged as PUSH-REFUSED, no PR touched" \
+  eval 'denied "non-fast-forward" && logged "PUSH-REFUSED non-fast-forward claw-state agent/state/claw" && ! called "[pr]" && ! force_pushed agent/state/claw'
+rm "$H/push_reject"
+
+stdin "$STATE_BUNDLE"
+SUDO_USER=coder run pr claw-state agent/state/claw "t"
+check "state: coder refused before anything is pushed" eval 'denied "only claw-backup" && [ ! -s "$H/git.log" ] && ! called "[pr]"'
+stdin "$STATE_BUNDLE"
+run pr claw-state agent/state/claw "t"
+check "state: unknown caller refused" eval 'denied "only claw-backup" && [ ! -s "$H/git.log" ]'
+
+stdin "$FAKE_BUNDLE"
+SUDO_USER=openclaw run pr claw-state claude/x "t"
+check "state repo takes no other branches" eval 'denied "takes nothing else" && [ ! -s "$H/git.log" ]'
+stdin "$STATE_BUNDLE"
+SUDO_USER=openclaw run pr claw-config agent/state/claw "t"
+check "state branches only go to the state repo" eval 'denied "state backups go to claw-state" && [ ! -s "$H/git.log" ]'
+
+stdin "$FAKE_BUNDLE"
+SUDO_USER=openclaw run pr claw-config claude/x "t"
+check "other agent branches still force-push" eval '[ $rc = 0 ] && force_pushed claude/x'
 
 touch "$H/not_gitbot"
 run issue claw-config "t"
