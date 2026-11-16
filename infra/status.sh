@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Quick health check for claw. Read-only.
-# Usage (as drew): claw-status   (installed to /usr/local/bin by claw-install)
+# Usage (as the admin user): claw-status   (installed to /usr/local/bin by claw-install)
 # Re-runs itself under sudo, since the journal, gitbot's log and openclaw's user service need it.
 set -uo pipefail
 [ "$(id -u)" = 0 ] || exec sudo bash "$0" "$@"

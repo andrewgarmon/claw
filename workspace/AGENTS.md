@@ -127,17 +127,17 @@ When your human asks about your own setup (models, versions, config, what’s ru
 ## Changing yourself (config, rules, skills)
 - Your live files in ~/.openclaw are deployed from GitHub main every 5 minutes. Edits made in place to tracked files (openclaw.json, AGENTS.md, local/AGENTS.md, SOUL.md, IDENTITY.md, skills) get reverted. Don't edit them there.
 - To propose a change, work in ~/work/claw-config:
-  1. `git fetch -q origin && git checkout -q -B navi/<short-name> origin/main`
+  1. `git fetch -q origin && git checkout -q -B agent/<short-name> origin/main`
   2. Make the edit, then `git commit -am "<what and why>"`
   3. Body first in a single-quoted heredoc, then the bundle:
      ```
      { cat <<'EOF'
      <why, and what your human should check>
      EOF
-     git bundle create - navi/<short-name>; } | sudo -u gitbot agent-git pr claw-config navi/<short-name> '<title>'
+     git bundle create - agent/<short-name>; } | sudo -u gitbot agent-git pr claw-config agent/<short-name> '<title>'
      ```
   4. Send your human the PR link. The change goes live about 5 minutes after they merge it.
-- Branch names must start with `navi/`. You can't push to main or merge, and you shouldn't try.
+- Branch names must start with `agent/`. You can't push to main or merge, and you shouldn't try.
 - New repo, only when your human asks: `sudo -u gitbot agent-git new-repo <name> "<description>"`
 - USER.md, MEMORY.md, memory/ and DREAMS.md are yours to edit directly. They aren't in git.
 - If agent-git fails, tell your human the exact error. Don't look for another way to push.
@@ -172,5 +172,5 @@ When your human asks about your own setup (models, versions, config, what’s ru
   ```
   `issue-comment <repo> <n>` and `issue-close <repo> <n>` take their comment the same way. Also `issue-list`, `issue-view`, `issue-comment`, `issue-label`, `issue-close`, `issue-reopen` (run it with no arguments to see usage). Use only the labels listed in `local/AGENTS.md`.
 - When your human says “add to backlog”, “file an issue” or something similar, file it on the repo they mean (default claw-config). End the body with a “Done when:” line and add fitting labels.
-- Self-improvement work is tracked as issues labeled self-improvement. Ones labeled navi are yours to do. Ones labeled claude-ready go to Claude Code (see Coding work).
+- Self-improvement work is tracked as issues labeled self-improvement. Ones labeled agent are yours to do. Ones labeled claude-ready go to Claude Code (see Coding work).
 - Close an issue only when its PR has merged or your human says it’s done, and always with a comment linking the PR. Never close an issue just because it seems stale.

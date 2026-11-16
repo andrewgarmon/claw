@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-cal: Navi's only way to Drew's iCloud calendars. Runs as calbot via sudo; Navi never
+# agent-cal: the assistant's only way to the owner's iCloud calendars. Runs as calbot via sudo; the assistant never
 # sees the Apple app-specific password (which also opens iCloud Mail).
 #   agent-cal calendars                                         calendar names, JSON
 #   agent-cal events [--days N] [--calendar NAME] [--tz ZONE]   events from the start of today, JSON

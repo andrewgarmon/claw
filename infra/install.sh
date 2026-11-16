@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Rebuild claw's CD + Claude Code plumbing from this repo. Safe to re-run.
-# Prereqs: users drew + openclaw exist, OpenClaw installed for openclaw (see README).
-# Don't run this directly. Run (as drew): sudo claw-install
+# Prereqs: the admin user and openclaw exist, OpenClaw installed for openclaw (see README).
+# Don't run this directly. Run (as the admin user): sudo claw-install
 # claw-install clones origin/main into a root-only dir and runs this from there.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 cd "$(dirname "$0")"
 
 # Refuse to run from a tree anyone but root could have changed (e.g. ~openclaw/.openclaw/infra,
-# which Navi's user can write between claw-sync resets): every directory from here up to /
+# which the assistant's user can write between claw-sync resets): every directory from here up to /
 # and every file under here must be root-owned and not group/other-writable.
 untrusted() {
   local d uid mode

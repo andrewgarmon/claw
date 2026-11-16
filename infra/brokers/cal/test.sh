@@ -14,7 +14,7 @@ T=$(mktemp -d); trap 'kill "${RAD_PID:-}" 2>/dev/null; rm -rf "$T"' EXIT
 H=$T/home BIN=$T/bin AC=$T/agent-cal FAKELIB=$T/lib
 mkdir -p "$H/.config" "$BIN" "$FAKELIB/venv/bin"
 SECRET=dummy-app-password
-printf 'APPLE_ID=drew@example.com\nAPPLE_APP_PASSWORD=%s\n' "$SECRET" > "$H/.config/caldav.env"
+printf 'APPLE_ID=owner@example.com\nAPPLE_APP_PASSWORD=%s\n' "$SECRET" > "$H/.config/caldav.env"
 
 sed -e "s|^export PATH=/usr/local/bin:/usr/bin:/bin$|export PATH=$BIN:/usr/bin:/bin|" \
     -e "s|^export HOME=/home/calbot$|export HOME=$H|" \
@@ -51,7 +51,7 @@ says() { grep -qF -- "$1" "$T/out"; }
 # ---------- allowed ----------
 run calendars
 check "calendars" eval '[ $rc = 0 ] && args_are calendars && logged CALENDARS && says "\"ok\""'
-check "credentials reach python through the env" eval 'grep -qx "pw=$SECRET" "$T/py.env" && grep -qx "id=drew@example.com" "$T/py.env" && grep -qx "url=" "$T/py.env"'
+check "credentials reach python through the env" eval 'grep -qx "pw=$SECRET" "$T/py.env" && grep -qx "id=owner@example.com" "$T/py.env" && grep -qx "url=" "$T/py.env"'
 check "state dir is calbot's, set by the wrapper" eval 'grep -qx "state=$H/state" "$T/py.env"'
 check "secret never in argv, the log or stdout" eval '! grep -q "$SECRET" "$T/py.args" "$H/agent-cal.log" "$T/out"'
 
@@ -94,7 +94,7 @@ run changes
 check "changes" eval '[ $rc = 0 ] && args_are changes America/New_York && logged CHANGES'
 
 # ---------- denied (python never runs) ----------
-printf 'APPLE_ID=drew@example.com\nAPPLE_APP_PASSWORD=%s\n' "$SECRET" > "$H/.config/caldav.env"
+printf 'APPLE_ID=owner@example.com\nAPPLE_APP_PASSWORD=%s\n' "$SECRET" > "$H/.config/caldav.env"
 for d in 0 61 99 abc "1;id" "" -1 " 1"; do
   run events --days "$d"
   check "events: bad --days '$d'" eval 'denied "--days must be"'
@@ -184,7 +184,7 @@ done
 mv "$H/.config/caldav.env" "$H/.config/caldav.env.bak"
 run calendars
 check "missing secret file: refused" eval 'denied "secret file missing"'
-printf 'APPLE_ID=drew@example.com\n' > "$H/.config/caldav.env"
+printf 'APPLE_ID=owner@example.com\n' > "$H/.config/caldav.env"
 run calendars
 check "password missing from caldav.env: refused" eval 'denied "APPLE_APP_PASSWORD missing"'
 printf 'APPLE_ID=$(touch %s/pwned)\nAPPLE_APP_PASSWORD=x\n' "$T" > "$H/.config/caldav.env"

@@ -20,7 +20,7 @@ Guardrails, so a wrong or manipulated call stays small and fixable:
   every occurrence) and nothing with other people on it (changes can email them).
 - Every create/update/delete is recorded with a copy of the event as it was; `undo` puts it back.
   Undo only reverses the newest open change to an event, from the last 7 days, and only if the event
-  hasn't been changed since (by Drew or anyone: its ETag must match what we wrote). It re-checks the
+  hasn't been changed since (by the owner or anyone: its ETag must match what we wrote). It re-checks the
   recurring/attendee rule and never re-creates something deleted after our edit.
 - Writes use If-Match, so nothing changed between our read and our write is overwritten.
 - At most 10 updates+deletes, 20 creates and 20 undos per 24 hours.

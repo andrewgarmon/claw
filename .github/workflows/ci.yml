@@ -1,6 +1,6 @@
 name: CI
 # Cheap guardrails for this config repo. Merges to main deploy to the host within ~5 min,
-# so these catch the mistakes that would take Navi down or leak something.
+# so these catch the mistakes that would take the assistant down or leak something.
 on:
   pull_request:
   push:

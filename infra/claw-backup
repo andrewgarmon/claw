@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# claw-backup: snapshot Navi's agent-owned state into the private claw-state repo.
+# claw-backup: snapshot the assistant's agent-owned state into the private claw-state repo.
 # Runs as openclaw from a root-owned systemd timer (nightly).
 # - copies USER.md, MEMORY.md, DREAMS.md and memory/** from the workspace into a local
 #   git repo (~/.openclaw/state-backup, ignored by claw-config, left alone by claw-sync)
 # - commits only when something changed, so the history is one commit per day with changes
-# - publishes through agent-git like any other agent push: branch navi/state/<host>,
+# - publishes through agent-git like any other agent push: branch agent/state/<host>,
 #   with one long-lived PR on claw-state that it keeps updating. Nothing needs merging.
 set -euo pipefail
 export HOME=/home/openclaw
@@ -13,12 +13,12 @@ WS=$HOME/.openclaw/workspace
 REPO=$HOME/.openclaw/state-backup
 ITEMS=(USER.md MEMORY.md DREAMS.md memory)
 host=$(hostname -s | tr -c 'A-Za-z0-9._\n-' '-')
-BRANCH=navi/state/$host
+BRANCH=agent/state/$host
 STATE=$HOME/.cache/claw-backup; mkdir -p "$STATE"
 exec 9>"$STATE/lock"; flock -n 9 || exit 0
 
 [ -d "$WS" ] || { echo "no workspace at $WS" >&2; exit 1; }
-gd() { git -C "$1" -c user.name=Navi -c user.email=navi@claw.invalid -c core.hooksPath=/dev/null "${@:2}"; }
+gd() { git -C "$1" -c user.name=Assistant -c user.email=assistant@claw.invalid -c core.hooksPath=/dev/null "${@:2}"; }
 g() { gd "$REPO" "$@"; }
 # claw-state's main is GitHub's "Initial commit". History must start from it or GitHub
 # refuses the PR ("no history in common"); openclaw can't read claw-state, so it ships here.
@@ -30,7 +30,7 @@ if [ ! -d "$REPO/.git" ]; then
   git init -q -b "$BRANCH" "$tmp"
   gd "$tmp" fetch -q "$ROOT_BUNDLE" refs/remotes/origin/main
   gd "$tmp" reset -q --hard "$ROOT_SHA"
-  printf '# claw-state (%s)\n\nNightly snapshot of Navi'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config.\n' \
+  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config.\n' \
     "$host" "$host" "$WS" > "$tmp/README.md"
   mv -T "$tmp" "$REPO"
 fi
