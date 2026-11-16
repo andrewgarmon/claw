@@ -59,6 +59,32 @@ jobs:
           tar xzf gl.tgz gitleaks && rm gl.tgz
           ./gitleaks git . --no-banner --redact
 
+  personal:
+    name: no personal words
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the range check reads every commit in the PR or push
+      - name: Check against PERSONAL_DENYLIST
+        # The list is a repo secret (one word or phrase per line), so it never goes public. Fork PRs
+        # don't get secrets, so the script skips there. It prints file:line or commit ids, never a word.
+        env:
+          PERSONAL_DENYLIST: ${{ secrets.PERSONAL_DENYLIST }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          range=
+          case "$EVENT" in
+            pull_request) range="$PR_BASE..$PR_HEAD" ;;
+            push) [ -n "$PUSH_BEFORE" ] && [ "${PUSH_BEFORE//0/}" != "" ] && range="$PUSH_BEFORE..$SHA" ;;
+          esac
+          bash .github/scripts/personal-denylist.sh $range
+
   state-files:
     name: agent state stays out of git
     runs-on: ubuntu-latest
