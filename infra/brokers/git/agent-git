@@ -39,7 +39,7 @@ OWNER=andrewgarmon
 REMOTE_BASE="https://github.com/$OWNER"
 MAX_BUNDLE_BYTES=$((200 * 1024 * 1024))
 MAX_TITLE=200 MAX_BODY=20000
-ISSUE_LABELS=(self-improvement claude-ready agent drew:low drew:med drew:high value:high value:med value:low bug enhancement)
+ISSUE_LABELS=(self-improvement claude-ready agent human-effort:low human-effort:med human-effort:high value:high value:med value:low bug enhancement)
 
 broker_require_user
 broker_secret_raw "$HOME/.config/gh-token" GH_TOKEN
@@ -67,7 +67,7 @@ require_issue() {
 ensure_label() {
   local color
   case "$2" in
-    drew:*)  color=d93f0b ;;
+    human-effort:*) color=d93f0b ;;
     value:*) color=0e8a16 ;;
     claude-ready) color=5319e7 ;;
     agent)   color=1d76db ;;
@@ -351,7 +351,7 @@ pr: { cat <<'EOF'
   body
   EOF
   git bundle create - <branch>; } | sudo -u gitbot agent-git pr <repo> <branch> '<title>'
-labels: self-improvement claude-ready agent drew:low drew:med drew:high value:high value:med value:low bug enhancement
+labels: self-improvement claude-ready agent human-effort:low human-effort:med human-effort:high value:high value:med value:low bug enhancement
 public repos: writes are Claude Code (coder) only and are checked for secrets and personal details first
 USAGE
     exit 1 ;;

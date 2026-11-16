@@ -95,14 +95,14 @@ says()      { grep -qF -- "$1" "$T/out"; }
 
 # ---------- allowed ----------
 stdin "Done when: it works"
-run issue claw-config "Add a thing" "claude-ready,drew:low"
+run issue claw-config "Add a thing" "claude-ready,human-effort:low"
 check "issue: creates with title, body and each allowlisted label" \
-  eval '[ $rc = 0 ] && called "[issue][create][-R][andrewgarmon/claw-config][--title=Add a thing][--body=Done when: it works][--label=claude-ready][--label=drew:low]" && says /issues/42 && logged "ISSUE-NEW claw-config"'
+  eval '[ $rc = 0 ] && called "[issue][create][-R][andrewgarmon/claw-config][--title=Add a thing][--body=Done when: it works][--label=claude-ready][--label=human-effort:low]" && says /issues/42 && logged "ISSUE-NEW claw-config"'
 
 stdin ""
-run issue new-repo "t" "drew:low,bug"
+run issue new-repo "t" "human-effort:low,bug"
 check "issue: missing labels created on the target repo first, without --force; existing ones don't fail it" \
-  eval '[ $rc = 0 ] && called "[label][create][drew:low][-R][andrewgarmon/new-repo][--color][d93f0b]" && called "[label][create][bug][-R][andrewgarmon/new-repo]" && ! called "--force" && called "[issue][create][-R][andrewgarmon/new-repo]" && [ "$(grep -n "^\[label\]" "$H/gh.log" | tail -1 | cut -d: -f1)" -lt "$(grep -n "^\[issue\]" "$H/gh.log" | cut -d: -f1)" ]'
+  eval '[ $rc = 0 ] && called "[label][create][human-effort:low][-R][andrewgarmon/new-repo][--color][d93f0b]" && called "[label][create][bug][-R][andrewgarmon/new-repo]" && ! called "--force" && called "[issue][create][-R][andrewgarmon/new-repo]" && [ "$(grep -n "^\[label\]" "$H/gh.log" | tail -1 | cut -d: -f1)" -lt "$(grep -n "^\[issue\]" "$H/gh.log" | cut -d: -f1)" ]'
 
 run issue claw-config "No body"
 check "issue: no body or labels gets a default body, no --label" \
