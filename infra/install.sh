@@ -52,6 +52,23 @@ id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
 install -d -m 755 -o coder -g coder /srv/work
 install -d -m 700 -o coder -g coder /home/coder/.config /home/coder/.claude
 install -m 755 -o root -g root coder-acp /usr/local/bin/
+# the ACP adapter coder-acp runs: exact versions from acp/package-lock.json, installed root-owned
+# (coder can run it, not change it), no install scripts. Reinstalled only when the lockfile changes;
+# built in a .new dir and swapped in, so a failed install leaves the old one working.
+ACP=/usr/local/lib/claw/acp
+if ! cmp -s acp/package-lock.json "$ACP/package-lock.json" || [ ! -x "$ACP/node_modules/.bin/claude-agent-acp" ]; then
+  if command -v npm >/dev/null; then
+    rm -rf "$ACP.new"
+    install -d -m 755 -o root -g root "$ACP.new"
+    install -m 644 -o root -g root acp/package.json acp/package-lock.json "$ACP.new/"
+    if (cd "$ACP.new" && HOME=/root npm ci --ignore-scripts --omit=dev --no-audit --no-fund --loglevel=error); then
+      rm -rf "$ACP" && mv "$ACP.new" "$ACP"
+      echo "ACP adapter $(node -p 'require(process.argv[1]).version' "$ACP/node_modules/@agentclientprotocol/claude-agent-acp/package.json") installed"
+    else
+      rm -rf "$ACP.new"; echo "install.sh: npm ci for the ACP adapter failed; kept the previous install" >&2
+    fi
+  fi
+fi
 visudo -cf coder.sudoers
 install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
 install -m 644 -o coder -g coder coder-CLAUDE.md /home/coder/.claude/CLAUDE.md
@@ -71,4 +88,6 @@ systemctl enable --now claw-sync.timer claw-backup.timer
 grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
 grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
 [ -x /home/coder/.local/bin/claude ]   || echo "TODO: install + log in Claude Code as coder (README)"
+cmp -s acp/package-lock.json "$ACP/package-lock.json" && [ -x "$ACP/node_modules/.bin/claude-agent-acp" ] \
+  || echo "TODO: the pinned ACP adapter isn't installed (needs Node/npm; README: Claude Code). Re-run: sudo claw-install"
 echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload"
