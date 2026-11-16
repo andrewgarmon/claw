@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # Refuse to run from a tree anyone but root could have changed (e.g. ~openclaw/.openclaw/infra,
-# which Navi's user can write between claw-sync resets): every directory from here up to /
+# which the assistant's user can write between claw-sync resets): every directory from here up to /
 # and every file under here must be root-owned and not group/other-writable.
 untrusted() {
   local d uid mode

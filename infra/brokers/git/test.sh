@@ -145,8 +145,8 @@ check "issue-comment: checks it is an issue, then comments" \
 
 run issue-label claw-config 23 add value:high
 check "issue-label add: ensures the label exists, then adds it" eval '[ $rc = 0 ] && called "[label][create][value:high][-R][andrewgarmon/claw-config]" && called "[issue][edit][23][-R][andrewgarmon/claw-config][--add-label=value:high]"'
-run issue-label claw-config 23 remove navi
-check "issue-label remove: creates no label" eval '[ $rc = 0 ] && called "[--remove-label=navi]" && ! called "[label]" && logged "ISSUE-LABEL claw-config#23 remove navi"'
+run issue-label claw-config 23 remove agent
+check "issue-label remove: creates no label" eval '[ $rc = 0 ] && called "[--remove-label=agent]" && ! called "[label]" && logged "ISSUE-LABEL claw-config#23 remove agent"'
 
 run new-repo fresh "A repo"
 check "new-repo: creates the repo, then seeds every allowlisted label" \
@@ -185,7 +185,7 @@ check "pr: header text mid-line does not split" eval '[ $rc = 0 ] && called "[--
 # ---------- denied ----------
 run issue claw-config "t" "bug,wontfix"
 check "issue: label outside allowlist denied, nothing created" eval 'denied "label not allowed: wontfix" && no_gh'
-run issue claw-config "t" "bug,,navi"
+run issue claw-config "t" "bug,,agent"
 check "issue: empty label in list denied" eval 'denied "label not allowed" && no_gh'
 run issue claw-config "t" "Bug"
 check "issue: labels are case-sensitive" eval 'denied && no_gh'

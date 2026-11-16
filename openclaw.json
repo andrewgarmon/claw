@@ -22,12 +22,7 @@
       "main": {
         "name": "main",
         "workspace": "/home/openclaw/.openclaw/workspace",
-        "agentDir": "/home/openclaw/.openclaw/agents/main/agent",
-        "identity": {
-          "name": "Navi",
-          "emoji": "🧚",
-          "theme": "Sharp, curious, and quick on my feet — here to illuminate the path and keep things moving."
-        }
+        "agentDir": "/home/openclaw/.openclaw/agents/main/agent"
       }
     }
   },

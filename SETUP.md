@@ -28,7 +28,7 @@ Name the repo **`claw-config`** (the rules and scripts assume that name). Create
 ```bash
 git add -A && git commit -qm "Initial config" && git remote add origin git@github.com:YOU/claw-config.git && git push -u origin main
 ```
-Optional edits: the assistant's name and emoji (`agents.entries.main.identity` in `openclaw.json`), and the issue-label allowlist (`ISSUE_LABELS` in `infra/brokers/git/agent-git`).
+Optional: the issue-label allowlist (`ISSUE_LABELS` in `infra/brokers/git/agent-git`). The assistant's name and emoji come from `workspace/IDENTITY.md`, which OpenClaw creates on first run and you keep private.
 
 **Check:** the private repo shows your files on GitHub, and `grep -rI andrewgarmon .` finds nothing.
 

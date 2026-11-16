@@ -301,7 +301,7 @@ class AgentCal(unittest.TestCase):
         self.assertEqual(self.listing("Edited then deleted"), [])  # not re-created behind the owner's back
 
     def test_undo_never_overwrites_later_changes(self):
-        # Navi edits, then the owner edits on their phone: undo must not clobber that edit
+        # The assistant edits, then the owner edits on their phone: undo must not clobber that edit
         i = self.make("Phone edit", 14)
         self.ok("update", self.TZ, i, "location", "", "", "", "Office", "")
         obj = self._server_copy("Phone edit")
@@ -310,7 +310,7 @@ class AgentCal(unittest.TestCase):
         self.assertIn("changed after c2", self.fails("undo", self.TZ, ""))
         self.assertEqual(self.listing("Phone edit")[0]["location"], "Home office")
 
-        # Navi creates, then the event gains attendees: undoing the create mustn't delete it
+        # The assistant creates, then the event gains attendees: undoing the create mustn't delete it
         self.make("Became a meeting", 15)
         obj = self._server_copy("Became a meeting")
         obj.data = obj.data.replace("END:VEVENT", "ATTENDEE:mailto:sam@example.com\r\nEND:VEVENT")
@@ -319,14 +319,14 @@ class AgentCal(unittest.TestCase):
         self.assertEqual(len(self.listing("Became a meeting")), 1)
 
     def test_chained_undo_keeps_an_edit_made_in_between(self):
-        # c2 Navi edit -> the owner edits on their phone -> c3 Navi edit -> undo c3 (back to the owner's version)
+        # c2 assistant edit -> the owner edits on their phone -> c3 assistant edit -> undo c3 (back to the owner's version)
         # -> undoing c2 must refuse, or the owner's phone edit would be silently lost
         i = self.make("Between edits", 18)
-        self.ok("update", self.TZ, i, "location", "", "", "", "Navi 1", "")
+        self.ok("update", self.TZ, i, "location", "", "", "", "Agent 1", "")
         obj = self._server_copy("Between edits")
-        obj.data = obj.data.replace("LOCATION:Navi 1", "LOCATION:Owner")
+        obj.data = obj.data.replace("LOCATION:Agent 1", "LOCATION:Owner")
         obj.save()
-        self.ok("update", self.TZ, i, "location", "", "", "", "Navi 2", "")
+        self.ok("update", self.TZ, i, "location", "", "", "", "Agent 2", "")
         self.ok("undo", self.TZ, "")  # c3
         self.assertEqual(self.listing("Between edits")[0]["location"], "Owner")
         self.assertIn("changed after c2", self.fails("undo", self.TZ, ""))

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # claw-install: apply infra/ from a fresh, root-owned clone of origin/main.
 #
-# install.sh runs as root. Running it from /home/openclaw/.openclaw/infra/ would let Navi's
+# install.sh runs as root. Running it from /home/openclaw/.openclaw/infra/ would let the assistant's
 # user (who can write that tree between claw-sync resets) change what root executes. So this
 # bootstrap never runs anything from that checkout: it clones origin/main into a root-only
 # temp dir, shows what changed in infra/ since the last install, asks, runs install.sh from

@@ -1,5 +1,5 @@
 [Unit]
-Description=Back up Navi's agent-owned state to the claw-state repo
+Description=Back up the assistant's agent-owned state to the claw-state repo
 Wants=network-online.target
 After=network-online.target
 
