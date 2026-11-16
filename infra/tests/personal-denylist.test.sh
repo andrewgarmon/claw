@@ -69,6 +69,14 @@ repo; base=$(git rev-parse HEAD); git checkout -qb feature2; echo ok > i.txt; gi
 git checkout -q main; git merge -q --no-ff -m "Merge pull request #10 from someone/clean" feature2
 run "$base..HEAD"; expect "clean merge passes" 0 "ok: no listed words"
 
+repo; mkdir -p notes && echo hi > "notes/Zürich.md"; git add notes; git commit -qm z
+out=$(PERSONAL_DENYLIST=zürich bash "$SCRIPT" 2>&1); rc=$?
+if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "1 tracked path" && ! printf '%s' "$out" | grep -qi "rich"; then ok "non-ASCII word in a path, case-insensitive"; else bad "non-ASCII path: rc=$rc $out"; fi
+
+repo; base=$(git rev-parse HEAD); echo hi > "Zürich.txt"; git add .; git commit -qm add; git rm -q "Zürich.txt"; git commit -qm rm
+out=$(PERSONAL_DENYLIST=zürich bash "$SCRIPT" "$base..HEAD" 2>&1); rc=$?
+if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "adds a listed word in its diff"; then ok "non-ASCII path in a range's diff header"; else bad "non-ASCII diff path: rc=$rc $out"; fi
+
 repo; run "deadbeef..HEAD"; expect "unreadable range warns and checks the tree" 0 "checked the tree only"
 
 echo "$pass passed, $fail failed"

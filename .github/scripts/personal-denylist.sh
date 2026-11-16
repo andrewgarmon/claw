@@ -7,6 +7,10 @@
 # usage: PERSONAL_DENYLIST=... personal-denylist.sh [<from>..<to>]
 set -euo pipefail
 range=${1:-}
+# paths verbatim (git octal-escapes non-ASCII ones by default, which a word like "zürich" would never
+# match), and a UTF-8 locale so -i folds non-ASCII letters too
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false
+export LC_ALL=C.UTF-8
 
 list=$(mktemp)
 trap 'rm -f "$list"' EXIT
