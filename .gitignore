@@ -22,3 +22,7 @@ workspace/memory/
 # infra: root-level plumbing, applied by hand with sudo claw-install (runs infra/install.sh)
 !infra/
 !infra/**
+
+# Python bytecode from test runs
+__pycache__/
+*.pyc
