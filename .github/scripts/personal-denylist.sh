@@ -37,9 +37,13 @@ fail=0
 
 # 1. file contents at this commit: print file:line, never the line itself, and withhold a path
 #    that contains a listed word too. -z gives path NUL line NUL content, so odd paths parse safely.
-hits=$(git grep -z -I -n -i -w -F -f "$list" -- . 2>/dev/null | while IFS= read -r -d '' path && IFS= read -r -d '' ln && IFS= read -r _; do
+#    git grep exits 0 on hits, 1 on none; anything else is an error, and an error must not pass.
+raw=$(mktemp); trap 'rm -f "$list" "$raw"' EXIT
+rc=0; git grep -z -I -n -i -w -F -f "$list" -- . > "$raw" 2>/dev/null || rc=$?
+if [ "$rc" -gt 1 ]; then echo "::error::git grep failed (exit $rc), so the file check couldn't run"; exit 1; fi
+hits=$(while IFS= read -r -d '' path && IFS= read -r -d '' ln && IFS= read -r _; do
   if printf '%s\n' "$path" | grep -q -i -w -F -f "$list"; then echo "(path withheld):$ln"; else echo "$path:$ln"; fi
-done || true)
+done < "$raw")
 if [ -n "$hits" ]; then
   echo "::error::listed words found in these files (word not shown):"
   printf '%s\n' "$hits"

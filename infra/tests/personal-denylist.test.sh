@@ -100,6 +100,9 @@ grep -q "PR's body contains" <<< "$out" && ok "PR body reported too" || bad "PR 
 repo; out=$(PERSONAL_DENYLIST=$LIST PR_TITLE="Clean title" PR_BRANCH=claude/clean PR_BODY="fine" bash "$SCRIPT" 2>&1); rc=$?
 expect "clean PR text passes" 0 "ok: no listed words"
 
+repo; out=$(cd "$T/r" && GIT_DIR=/nonexistent PERSONAL_DENYLIST=$LIST bash "$SCRIPT" 2>&1); rc=$?
+expect "git grep error fails instead of passing" 1 "git grep failed"
+
 repo; run "deadbeef..HEAD"; expect "unreadable range warns and checks the tree" 0 "checked the tree only"
 
 echo "$pass passed, $fail failed"
