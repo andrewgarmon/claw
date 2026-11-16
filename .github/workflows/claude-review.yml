@@ -9,8 +9,13 @@ concurrency:
 
 jobs:
   review:
-    # same-repo, non-draft PRs only: fork PRs never get the secret, so skip them instead of failing
-    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    # Shared with the private config repos (they get it through upstream sync). Same-repo, non-draft
+    # PRs only: fork PRs never get the secret, so skip them instead of failing. Skip upstream-sync/*
+    # PRs: those changes were already reviewed here, and the sync bot isn't an allowed actor anyway.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      !startsWith(github.event.pull_request.head.ref, 'upstream-sync/')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -24,21 +29,22 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # this repo is public, so Actions logs are too: keep the transcript out of them
-          show_full_output: false
+          # Actions logs on a public repo are public: only show the transcript on private repos
+          show_full_output: ${{ github.event.repository.private }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
 
             Review this pull request. The PR branch is checked out in the working directory.
-            Context: this is the public upstream of a personal AI agent setup (OpenClaw) on a Linux server. It syncs
-            into private config repos, where merges to main deploy automatically.
+            Context: this repo is part of a personal AI agent setup (OpenClaw) on a Linux server: either the public
+            upstream or a private config repo that syncs from it. Merges to the config repo's main deploy automatically.
+            This repo is ${{ github.event.repository.visibility }}.
             Users: the admin user (sudo), openclaw (runs the agent), coder (runs Claude Code), gitbot (only holder of
             the GitHub write token).
             Focus on: bugs; commands or docs that won't work as written (permissions, paths, which user runs them);
             security (secrets, privilege, anything that weakens the agent-PR / human-merge model); config that would
-            break the gateway; anything personal leaking into this public repo (real names, places, IDs, hostnames,
-            tokens).
+            break the gateway. If this repo is public, also flag anything personal leaking into it (real names,
+            places, IDs, hostnames, tokens).
             Skip style nitpicks.
             Use mcp__github_inline_comment__create_inline_comment for specific lines and `gh pr comment` for one short summary.
             If it looks good, say so in one line.
