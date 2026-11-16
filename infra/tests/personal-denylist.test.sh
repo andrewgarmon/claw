@@ -88,6 +88,10 @@ grep -q "adds a listed word in its diff" <<< "$out" && ok ".gitattributes '* -di
 repo; printf '* binary\n' > .gitattributes; echo "hi $WORD" > k.txt; git add .; git commit -qm bin
 run; expect ".gitattributes '* binary' doesn't hide content" 1 "^k.txt:1$"
 
+repo; base=$(git rev-parse HEAD); mkdir p && echo hi > p/a.md; git add p; git commit -qm a
+git mv p/a.md "p/$WORD.md"; git commit -qm mv; git mv "p/$WORD.md" p/a.md; git commit -qm back
+run "$base..HEAD"; expect "rename to a listed path and back still fails" 1 "adds a listed word in its diff"
+
 repo; run "deadbeef..HEAD"; expect "unreadable range warns and checks the tree" 0 "checked the tree only"
 
 echo "$pass passed, $fail failed"

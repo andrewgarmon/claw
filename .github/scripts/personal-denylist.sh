@@ -61,7 +61,7 @@ fi
 if [ -n "$range" ]; then
   for c in $(git rev-list "$range"); do
     if [ -z "$(git rev-list --no-walk --merges "$c")" ] \
-       && git show --format= --no-color --no-ext-diff --no-textconv "$c" | { grep '^+' || true; } | matches; then
+       && git show --format= --no-color --no-ext-diff --no-textconv --no-renames "$c" | { grep '^+' || true; } | matches; then
       echo "::error::commit $c adds a listed word in its diff"; fail=1
     fi
     if git show -s --format=%B "$c" | matches; then

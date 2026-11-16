@@ -77,6 +77,8 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           range=
           case "$EVENT" in
@@ -84,12 +86,17 @@ jobs:
             push) [ -n "$PUSH_BEFORE" ] && [ "${PUSH_BEFORE//0/}" != "" ] && range="$PUSH_BEFORE..$SHA" ;;
           esac
           # The script gets the secret, so on PRs run the base branch's copy: a PR (agents can push
-          # .github/scripts/) can't switch the check off or print the list. Only the PR that first adds
-          # the script, while the base has none, runs its own copy. Pushes to main run what's on main.
+          # .github/scripts/) can't switch the check off or print the list. If the base has no copy, only
+          # a PR into the default branch (the one that first adds the script) runs its own; any other
+          # base is skipped rather than handing the secret to PR code. Pushes to main run what's on main.
           S=.github/scripts/personal-denylist.sh
           if [ "$EVENT" = pull_request ]; then
             if git show "$PR_BASE:$S" > "$RUNNER_TEMP/pd.sh" 2>/dev/null; then S=$RUNNER_TEMP/pd.sh
-            else echo "::notice::$S isn't on the base branch yet (the PR adding it): running this PR's copy"; fi
+            elif [ "$BASE_REF" = "$DEFAULT_BRANCH" ]; then
+              echo "::notice::$S isn't on $DEFAULT_BRANCH yet (the PR adding it): running this PR's copy"
+            else
+              echo "::warning::$S isn't on the base branch $BASE_REF: skipped (the PR's own copy never gets the secret)"; exit 0
+            fi
           fi
           bash "$S" $range
 
