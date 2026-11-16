@@ -4,7 +4,9 @@
 # whole-word, fixed strings. Never prints a matched word: only file:line (a path that itself contains a
 # listed word is withheld), a count of matching paths, or commit ids.
 # An empty or missing list (fork PRs get no secrets) skips with a note.
-# usage: PERSONAL_DENYLIST=... personal-denylist.sh [<from>..<to>]
+# On PRs, also checks PR_TITLE, PR_BRANCH and PR_BODY (env) before merge, since they go public
+# immediately and end up in the merge or squash commit.
+# usage: PERSONAL_DENYLIST=... [PR_TITLE=... PR_BRANCH=... PR_BODY=...] personal-denylist.sh [<from>..<to>]
 set -euo pipefail
 range=${1:-}
 # - paths verbatim: git octal-escapes non-ASCII ones by default, which a word like "zürich" never matches
@@ -69,6 +71,13 @@ if [ -n "$range" ]; then
     fi
   done
 fi
+
+# 4. PR title, branch name and body: public already, and carried into the merge or squash commit
+for what in PR_TITLE PR_BRANCH PR_BODY; do
+  if [ -n "${!what:-}" ] && printf '%s\n' "${!what}" | matches; then
+    name=${what#PR_}; echo "::error::the PR's ${name,,} contains a listed word"; fail=1
+  fi
+done
 
 [ "$fail" = 0 ] && echo "ok: no listed words"
 exit "$fail"

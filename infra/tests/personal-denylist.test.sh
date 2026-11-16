@@ -92,6 +92,14 @@ repo; base=$(git rev-parse HEAD); mkdir p && echo hi > p/a.md; git add p; git co
 git mv p/a.md "p/$WORD.md"; git commit -qm mv; git mv "p/$WORD.md" p/a.md; git commit -qm back
 run "$base..HEAD"; expect "rename to a listed path and back still fails" 1 "adds a listed word in its diff"
 
+repo; out=$(PERSONAL_DENYLIST=$LIST PR_TITLE="Fix for $WORD" PR_BRANCH=claude/x PR_BODY="body" bash "$SCRIPT" 2>&1); rc=$?
+expect "PR title with a listed word fails" 1 "PR's title contains"
+repo; out=$(PERSONAL_DENYLIST=$LIST PR_TITLE="t" PR_BRANCH="claude/$WORD" PR_BODY=$'line\nsee quuxville heights' bash "$SCRIPT" 2>&1); rc=$?
+expect "PR branch and body with listed words fail" 1 "PR's branch contains"
+grep -q "PR's body contains" <<< "$out" && ok "PR body reported too" || bad "PR body not reported: $out"
+repo; out=$(PERSONAL_DENYLIST=$LIST PR_TITLE="Clean title" PR_BRANCH=claude/clean PR_BODY="fine" bash "$SCRIPT" 2>&1); rc=$?
+expect "clean PR text passes" 0 "ok: no listed words"
+
 repo; run "deadbeef..HEAD"; expect "unreadable range warns and checks the tree" 0 "checked the tree only"
 
 echo "$pass passed, $fail failed"

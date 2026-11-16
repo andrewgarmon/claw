@@ -77,6 +77,9 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PUSH_BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
           BASE_REF: ${{ github.base_ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
