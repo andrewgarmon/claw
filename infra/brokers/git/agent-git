@@ -18,6 +18,9 @@
 #   EOF
 #   git bundle create - <branch>; } | sudo -u gitbot agent-git pr <repo> <branch> '<title>'
 # Branches must be agent/* or claude/*. Never pushes main, never merges, never deletes.
+# State backups (agent/state/*) only go to the state repo, only from openclaw (claw-backup), and are
+# never force-pushed: a non-fast-forward update is refused, so a rebuilt or rewritten state-backup
+# can't replace the backup history. The state repo takes no other branches.
 # Issues: create, comment, label, close, reopen only. No delete, lock, transfer, or editing
 # existing titles, bodies or comments. Issue commands refuse pull request numbers.
 # Allowlisted labels missing on the target repo are created on first use (never edited).
@@ -38,6 +41,7 @@ BROKER=agent-git BROKER_USER=gitbot LOG=$HOME/agent-git.log
 OWNER=andrewgarmon
 REMOTE_BASE="https://github.com/$OWNER"
 MAX_BUNDLE_BYTES=$((200 * 1024 * 1024))
+STATE_REPO=claw-state  # where claw-backup keeps agent/state/<host>
 MAX_TITLE=200 MAX_BODY=20000
 ISSUE_LABELS=(self-improvement claude-ready agent human-effort:low human-effort:med human-effort:high value:high value:med value:low bug enhancement)
 
@@ -148,6 +152,14 @@ case "$cmd" in
     valid_branch "$branch" || die "branch must be agent/<name> or claude/<name>: $branch"
     [ -n "$title" ] && [ ${#title} -le 200 ] || die "title empty or too long"
     [ -t 0 ] && die "pipe a bundle on stdin: git bundle create - $branch | sudo -u gitbot agent-git pr ..."
+    state_push=0
+    if [[ "$branch" == agent/state/* ]] || [ "$repo" = "$STATE_REPO" ]; then
+      [ "$repo" = "$STATE_REPO" ] && [[ "$branch" == agent/state/* ]] \
+        || die "state backups go to $STATE_REPO on agent/state/<host>, and $STATE_REPO takes nothing else ($repo $branch refused)"
+      [ "${SUDO_USER:-}" = openclaw ] \
+        || die "only claw-backup (openclaw) pushes state backups ($STATE_REPO refused for ${SUDO_USER:-?})"
+      state_push=1
+    fi
 
     tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
     head -c $((MAX_BUNDLE_BYTES + MAX_BODY * 4 + 1)) > "$tmp/in"
@@ -200,9 +212,20 @@ case "$cmd" in
         > "$tmp/scan/added-paths" || die "could not read the commits to check them; nothing pushed"
       leak_check "$repo" "$tmp/scan"
     fi
-    # push only to the same agent branch on GitHub (force is fine: it's the agent's own branch)
-    git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+refs/agent/$branch:refs/heads/$branch" \
-      || die "push failed for $repo $branch"
+    if [ "$state_push" = 1 ]; then
+      # state backups: never force. GitHub refuses a non-fast-forward, so the history can only grow.
+      if ! out=$(git -C "$work" "${GIT_AUTH[@]}" push --porcelain "$REMOTE_BASE/$repo.git" "refs/agent/$branch:refs/heads/$branch" 2>&1); then
+        if grep -q '\[rejected\]' <<< "$out"; then
+          log "PUSH-REFUSED non-fast-forward $repo $branch"
+          die "refused: this would replace the history of $branch on $repo (non-fast-forward). If ~/.openclaw/state-backup was lost or rebuilt, restore it from the branch (infra/README.md: Restoring state); nothing was pushed."
+        fi
+        die "push failed for $repo $branch"
+      fi
+    else
+      # push only to the same agent branch on GitHub (force is fine: it's the agent's own branch)
+      git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+refs/agent/$branch:refs/heads/$branch" \
+        || die "push failed for $repo $branch"
+    fi
     log "PUSH $repo $branch $(git -C "$work" rev-parse "refs/agent/$branch")"
 
     cd "$tmp"
