@@ -55,6 +55,20 @@ run "$base..HEAD"; expect "word in a commit message fails" 1 "listed word in its
 repo; base=$(git rev-parse HEAD); echo fine > g.txt; git add g.txt; git commit -qm fine
 run "$base..HEAD"; expect "clean range passes" 0 "ok: no listed words"
 
+repo; mkdir -p notes && echo "lunch with $WORD" > "notes/$WORD.md"; git add notes; git commit -qm n
+run; expect "word in both path and content: path withheld from file:line" 1 "^\(path withheld\):1$"
+
+repo; mkdir -p 'odd:dir' && echo "$WORD" > 'odd:dir/x.txt'; git add .; git commit -qm o
+run; expect "path with a colon still prints file:line" 1 "^odd:dir/x.txt:1$"
+
+repo; base=$(git rev-parse HEAD); git checkout -qb feature; echo ok > h.txt; git add h.txt; git commit -qm h
+git checkout -q main; git merge -q --no-ff -m "Merge pull request #9 from someone/$WORD-branch" feature
+run "$base..HEAD"; expect "word in a merge commit message fails" 1 "listed word in its message"
+
+repo; base=$(git rev-parse HEAD); git checkout -qb feature2; echo ok > i.txt; git add i.txt; git commit -qm i
+git checkout -q main; git merge -q --no-ff -m "Merge pull request #10 from someone/clean" feature2
+run "$base..HEAD"; expect "clean merge passes" 0 "ok: no listed words"
+
 repo; run "deadbeef..HEAD"; expect "unreadable range warns and checks the tree" 0 "checked the tree only"
 
 echo "$pass passed, $fail failed"

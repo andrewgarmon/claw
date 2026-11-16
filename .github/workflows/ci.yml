@@ -83,7 +83,15 @@ jobs:
             pull_request) range="$PR_BASE..$PR_HEAD" ;;
             push) [ -n "$PUSH_BEFORE" ] && [ "${PUSH_BEFORE//0/}" != "" ] && range="$PUSH_BEFORE..$SHA" ;;
           esac
-          bash .github/scripts/personal-denylist.sh $range
+          # The script gets the secret, so on PRs run the base branch's copy: a PR (agents can push
+          # .github/scripts/) can't switch the check off or print the list. Only the PR that first adds
+          # the script, while the base has none, runs its own copy. Pushes to main run what's on main.
+          S=.github/scripts/personal-denylist.sh
+          if [ "$EVENT" = pull_request ]; then
+            if git show "$PR_BASE:$S" > "$RUNNER_TEMP/pd.sh" 2>/dev/null; then S=$RUNNER_TEMP/pd.sh
+            else echo "::notice::$S isn't on the base branch yet (the PR adding it): running this PR's copy"; fi
+          fi
+          bash "$S" $range
 
   state-files:
     name: agent state stays out of git
