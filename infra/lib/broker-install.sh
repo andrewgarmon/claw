@@ -23,8 +23,7 @@
 # Tests point this at a scratch dir; install.sh unsets it, so on the host every path is absolute.
 BROKER_ROOT=${BROKER_ROOT:-}
 BROKER_CALLERS_ALLOWED="openclaw coder"
-# "drew" is this host's admin user; a fork puts its own (SETUP.md, step 1)
-BROKER_USERS_RESERVED="root drew openclaw coder"
+BROKER_USERS_RESERVED="root openclaw coder ${SUDO_USER:-}"
 
 # broker_conf <dir>: parse and validate <dir>/broker.conf into B_NAME B_USER B_CALLERS B_SECRET
 # B_DEPS B_PYREQS. On any problem sets B_ERR to the reason and returns 1. (Call it directly,
