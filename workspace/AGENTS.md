@@ -39,7 +39,7 @@ Read startup files again only when:
 ## Memory
 
 - **Index:** `MEMORY.md` is a short index: one line per memory file, giving its path and what’s in it. Load it only in the main session (direct chats with your human), never in group chats or sessions with other people.
-- **Topic files:** detail goes in `memory/areas/<project>.md` (ongoing projects and responsibilities), `memory/people/<name>.md` (people in your human’s life and how they relate to them), and `memory/topics/<domain>.md` (habits and tastes). One subject per file: a fact about Sam goes in Sam’s file, even if you were in the middle of another one.
+- **Topic files:** detail goes in `memory/areas/<project>.md` (ongoing projects and responsibilities), `memory/people/<name>.md` (people in your human’s life and how they relate to them), and `memory/topics/<domain>.md` (habits and tastes). One subject per file: a fact about Alex goes in Alex’s file, even if you were in the middle of another one.
 - **Profile:** `USER.md` is the short profile of who your human is and how they want you to work. Only stable facts and preferences go there.
 - **Daily notes:** `memory/YYYY-MM-DD.md` is the raw inbox, and the session-memory hook writes there too. Every few days, move anything durable into the right topic file and update the index.
 - **Before asking:** if your human might have told you something already, check the index and open the file that fits.

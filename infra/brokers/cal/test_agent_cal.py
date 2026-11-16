@@ -158,15 +158,15 @@ class AgentCal(unittest.TestCase):
 
     def test_create_timed_then_duplicate(self):
         start, end = f"{self.d(2)}T12:00", f"{self.d(2)}T13:00"
-        out = self.ok("create", "America/New_York", "home", "Lunch w/ Sam", start, end, "Primanti's", "line1\nline2")
+        out = self.ok("create", "America/New_York", "home", "Lunch w/ Alex", start, end, "Cafe", "line1\nline2")
         self.assertTrue(out["created"])
         self.assertEqual(out["calendar"], "Home")
         self.assertTrue(out["start"].startswith(start))
-        again = self.ok("create", "America/New_York", "Home", "lunch w/ sam", start, end, "", "")
+        again = self.ok("create", "America/New_York", "Home", "lunch w/ alex", start, end, "", "")
         self.assertEqual((again["created"], again.get("duplicate")), (False, True))
-        evs = [e for e in self.ok("events", "America/New_York", "3", "Home") if e["title"] == "Lunch w/ Sam"]
+        evs = [e for e in self.ok("events", "America/New_York", "3", "Home") if e["title"] == "Lunch w/ Alex"]
         self.assertEqual(len(evs), 1)
-        self.assertEqual((evs[0]["location"], evs[0]["notes"]), ("Primanti's", "line1\nline2"))
+        self.assertEqual((evs[0]["location"], evs[0]["notes"]), ("Cafe", "line1\nline2"))
 
     def test_create_all_day(self):
         out = self.ok("create", "America/New_York", "Work", "Day off", self.d(3), self.d(4), "", "")
@@ -233,7 +233,7 @@ class AgentCal(unittest.TestCase):
         self.assertTrue(by["Team sync"].get("shared") and "id" not in by["Team sync"])
 
     def test_update_delete_undo_cycle(self):
-        i = self.make("Haircut", 8, location="Mt Lebanon")
+        i = self.make("Haircut", 8, location="Downtown")
         t = lambda d, h, m=0: dt.datetime.combine(self.today + dt.timedelta(days=d), dt.time(h, m), NY).isoformat(timespec="minutes")
 
         out = self.ok("update", self.TZ, i, "title,start", "Haircut (moved)", f"{self.d(9)}T15:00", "", "", "")
@@ -253,7 +253,7 @@ class AgentCal(unittest.TestCase):
         self.assertEqual((out["undone"], out["title"], out["start"]), ("c4", "Haircut (moved)", t(9, 15)))
         self.assertEqual(len(self.listing("Haircut (moved)")), 1)
         self.ok("undo", self.TZ, "")  # c3: location back
-        self.assertEqual(self.listing("Haircut (moved)")[0]["location"], "Mt Lebanon")
+        self.assertEqual(self.listing("Haircut (moved)")[0]["location"], "Downtown")
         out = self.ok("undo", self.TZ, "c2")  # original title and time
         self.assertEqual((out["title"], out["start"]), ("Haircut", t(8, 12)))
         [ev] = self.listing("Haircut")
@@ -283,7 +283,7 @@ class AgentCal(unittest.TestCase):
 
         j = self.make("Got invitees", 11)
         obj = self._server_copy("Got invitees")
-        obj.data = obj.data.replace("END:VEVENT", "ATTENDEE:mailto:sam@example.com\r\nEND:VEVENT")
+        obj.data = obj.data.replace("END:VEVENT", "ATTENDEE:mailto:alex@example.com\r\nEND:VEVENT")
         obj.save()
         self.assertIn("other people", self.fails("update", self.TZ, j, "title", "x", "", "", "", ""))
         self.assertEqual(self.ok("changes", self.TZ)[0]["action"], "create")  # nothing recorded
@@ -313,7 +313,7 @@ class AgentCal(unittest.TestCase):
         # The assistant creates, then the event gains attendees: undoing the create mustn't delete it
         self.make("Became a meeting", 15)
         obj = self._server_copy("Became a meeting")
-        obj.data = obj.data.replace("END:VEVENT", "ATTENDEE:mailto:sam@example.com\r\nEND:VEVENT")
+        obj.data = obj.data.replace("END:VEVENT", "ATTENDEE:mailto:alex@example.com\r\nEND:VEVENT")
         obj.save()
         self.assertIn("changed after c3", self.fails("undo", self.TZ, "c3"))
         self.assertEqual(len(self.listing("Became a meeting")), 1)
