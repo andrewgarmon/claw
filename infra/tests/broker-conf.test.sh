@@ -83,11 +83,24 @@ rejects "key set twice" "USER set twice" cal "$OK
 USER=other"
 rejects "missing USER" "USER" cal 'CALLERS=openclaw
 SECRET=s'
-for u in root drew openclaw coder; do
+for u in root openclaw coder; do
   rejects "reserved USER $u" "can't be $u" cal "USER=$u
 CALLERS=openclaw
 SECRET=s"
 done
+# the admin running sudo claw-install is reserved too, by $SUDO_USER rather than by name
+export SUDO_USER="admin"
+# shellcheck source=../lib/broker-install.sh
+. "$INFRA/lib/broker-install.sh"
+rejects "reserved USER: the sudo caller" "can't be admin" cal 'USER=admin
+CALLERS=openclaw
+SECRET=s'
+unset SUDO_USER
+# shellcheck source=../lib/broker-install.sh
+. "$INFRA/lib/broker-install.sh"
+accepts "no SUDO_USER: nothing extra reserved" cal 'USER=admin
+CALLERS=openclaw
+SECRET=s'
 rejects "USER with uppercase" "bad or missing USER" cal 'USER=CalBot
 CALLERS=openclaw
 SECRET=s'
@@ -96,7 +109,7 @@ CALLERS=openclaw
 SECRET=s"
 rejects "missing CALLERS" "CALLERS missing" cal 'USER=calbot
 SECRET=s'
-for c in drew root ALL gitbot "%sudo"; do
+for c in admin root ALL gitbot "%sudo"; do
   rejects "caller not allowlisted: $c" "" cal "USER=calbot
 CALLERS=\"$c\"
 SECRET=s"

@@ -20,7 +20,6 @@ Your copy is private and holds your personal files. This repo stays a public ref
 git clone https://github.com/andrewgarmon/claw claw-config && cd claw-config
 rm -rf .git && git init -q -b main
 grep -rlI andrewgarmon . | xargs sed -i 's/andrewgarmon/YOU/g'          # GitHub owner in scripts and docs
-sed -i 's/root drew openclaw coder/root ADMIN openclaw coder/; s/for c in drew /for c in ADMIN /' infra/lib/broker-install.sh infra/tests/broker-conf.test.sh   # your admin username
 cp workspace/local/AGENTS.md.example workspace/local/AGENTS.md          # fill it in now or later
 for t in infra/tests/*.test.sh infra/brokers/*/test.sh; do bash "$t" >/dev/null 2>&1 || echo "FAIL $t"; done   # no output = all pass
 ```
