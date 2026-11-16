@@ -7,10 +7,18 @@
 # usage: PERSONAL_DENYLIST=... personal-denylist.sh [<from>..<to>]
 set -euo pipefail
 range=${1:-}
-# paths verbatim (git octal-escapes non-ASCII ones by default, which a word like "zürich" would never
-# match), and a UTF-8 locale so -i folds non-ASCII letters too
-export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false
+# - paths verbatim: git octal-escapes non-ASCII ones by default, which a word like "zürich" never matches
+# - ignore gitattributes (the scanned tree's, and any global file): otherwise a PR adding "* -diff"
+#   makes every file look binary, so git grep -I and the diffs skip them. Attributes come from the
+#   empty tree instead (git >= 2.40); real binaries are still detected by content.
+# - a UTF-8 locale so -i folds non-ASCII letters too
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false \
+  GIT_CONFIG_KEY_1=core.attributesFile GIT_CONFIG_VALUE_1=/dev/null
+export GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904  # the empty tree
 export LC_ALL=C.UTF-8
+# matches <file>: count, never grep -q. -q quits at the first hit, the writer dies of SIGPIPE, and with
+# pipefail that turns a hit in a big diff into "no match". Counting reads everything.
+matches() { [ "$(grep -c -i -w -F -f "$list" || true)" -gt 0 ]; }
 
 list=$(mktemp)
 trap 'rm -f "$list"' EXIT
@@ -53,10 +61,10 @@ fi
 if [ -n "$range" ]; then
   for c in $(git rev-list "$range"); do
     if [ -z "$(git rev-list --no-walk --merges "$c")" ] \
-       && git show --format= --no-color --no-ext-diff "$c" | grep '^+' | grep -q -i -w -F -f "$list"; then
+       && git show --format= --no-color --no-ext-diff --no-textconv "$c" | { grep '^+' || true; } | matches; then
       echo "::error::commit $c adds a listed word in its diff"; fail=1
     fi
-    if git show -s --format=%B "$c" | grep -q -i -w -F -f "$list"; then
+    if git show -s --format=%B "$c" | matches; then
       echo "::error::commit $c has a listed word in its message"; fail=1
     fi
   done

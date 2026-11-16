@@ -77,6 +77,17 @@ repo; base=$(git rev-parse HEAD); echo hi > "Zürich.txt"; git add .; git commit
 out=$(PERSONAL_DENYLIST=zürich bash "$SCRIPT" "$base..HEAD" 2>&1); rc=$?
 if [ "$rc" = 1 ] && printf '%s' "$out" | grep -q "adds a listed word in its diff"; then ok "non-ASCII path in a range's diff header"; else bad "non-ASCII diff path: rc=$rc $out"; fi
 
+repo; base=$(git rev-parse HEAD)
+{ echo "$WORD"; head -c 300000 /dev/zero | tr '\0' 'a' | fold -w 100; } > big.txt; git add big.txt; git commit -qm big; git rm -q big.txt; git commit -qm rm
+run "$base..HEAD"; expect "word in a large diff (SIGPIPE) still fails" 1 "adds a listed word in its diff"
+
+repo; base=$(git rev-parse HEAD); printf '* -diff\n' > .gitattributes; echo "hi $WORD" > j.txt; git add .; git commit -qm attrs
+run "$base..HEAD"; expect ".gitattributes '* -diff' doesn't hide content" 1 "^j.txt:1$"
+grep -q "adds a listed word in its diff" <<< "$out" && ok ".gitattributes '* -diff' doesn't hide the diff" || bad ".gitattributes hid the diff: $out"
+
+repo; printf '* binary\n' > .gitattributes; echo "hi $WORD" > k.txt; git add .; git commit -qm bin
+run; expect ".gitattributes '* binary' doesn't hide content" 1 "^k.txt:1$"
+
 repo; run "deadbeef..HEAD"; expect "unreadable range warns and checks the tree" 0 "checked the tree only"
 
 echo "$pass passed, $fail failed"
