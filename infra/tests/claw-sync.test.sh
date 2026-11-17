@@ -7,6 +7,7 @@ SYNC=$(cd "$(dirname "$0")/.." && pwd)/claw-sync
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export CLAW_SYNC_HOME=$T/home CLAW_SYNC_HEALTH_WAIT=0 CLAW_SYNC_IDLE_WAIT=0
 export CLAW_SYNC_FULL_EVERY=0   # every run is a full run, except in the idle fast-path tests at the end
+export CLAW_SYNC_FETCH_FAIL_RUNS=3   # the default (15) is checked separately at the end
 unset HEALTHCHECKS_PING_URL
 H=$CLAW_SYNC_HOME BIN=$H/.npm-global/bin
 mkdir -p "$BIN"
@@ -226,6 +227,10 @@ c20=$(commit '{"v":20}')
 run; check "forged future last-full: doesn't suppress a deploy" eval '[ $rc = 0 ] && head_is $c20 && pinged "" "deployed"'
 echo 'not-a-number' > "$S/last-full"
 run; check "garbage last-full: full run" eval '[ $rc = 0 ] && pinged "" "up to date"'
+echo 08 > "$S/last-full"
+run; check "leading-zero last-full (octal trap): full run, no arithmetic error" eval '[ $rc = 0 ] && pinged "" "up to date" && ! grep -q "too great" "$T/out"'
+echo 0000000001 > "$S/last-full"
+run; check "zero-padded old last-full: full run" eval '[ $rc = 0 ] && pinged "" "up to date"'
 echo $(( $(date +%s) - 301 )) > "$S/last-full"; touch "$H/gw_down"
 run; check "unhealthy full run: fail ping" eval '[ $rc = 1 ] && pinged /fail "not healthy"'
 rm "$H/gw_down"
@@ -234,6 +239,10 @@ run; check "then quiet again" eval 'quiet'
 mv "$T/origin.git" "$T/gone.git"
 run; check "fetch failure while idle: still counted" eval '[ "$(cat "$S/fetch-fails")" = 1 ]'
 run; run; check "3 fetch failures while idle: fail ping" eval '[ $rc = 1 ] && pinged /fail "git fetch failed 3 runs in a row"'
+rm "$S/fetch-fails"; unset CLAW_SYNC_FETCH_FAIL_RUNS
+for _ in $(seq 14); do run; done
+check "default threshold: 14 fetch failures (~14 min) don't fail-ping" eval '[ "$(cat "$S/fetch-fails")" = 14 ] && ! pinged /fail ""'
+run; check "default threshold: the 15th does" eval '[ $rc = 1 ] && pinged /fail "git fetch failed 15 runs in a row"'
 mv "$T/gone.git" "$T/origin.git"
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }
