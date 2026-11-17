@@ -79,6 +79,7 @@ cat > "$BIN/systemctl" <<EOF
 t=\${*: -1}
 case "\$1" in
   is-enabled|is-active) [ ! -e "$T/off_\$t" ] ;;
+  show) [ -e "$T/running_\$t" ] && echo activating || echo inactive ;;
   list-timers) if [ -e "$T/nonext_\$t" ]; then echo "- - Mon 2026-11-16 03:30:00 UTC 1h ago \$t x.service"
                else echo "Tue 2026-11-17 02:16:03 UTC 42s Tue 2026-11-17 02:15:03 UTC 18s ago \$t x.service"; fi ;;
   *) exit 2 ;;
@@ -145,7 +146,9 @@ touch "$T/off_claw-backup.timer"
 run; check "timer disabled: FAIL" eval '[ $rc = 1 ] && says "FAIL timers: claw-backup.timer isn.t enabled and active"'
 rm "$T/off_claw-backup.timer"; touch "$T/nonext_claw-sync.timer"
 run; check "timer with no next run: FAIL" eval '[ $rc = 1 ] && says "FAIL timers: claw-sync.timer has no next run"'
-rm "$T/nonext_claw-sync.timer"
+touch "$T/running_claw-sync.service"
+run; check "no next run while its service is running (just fired): PASS" eval '[ $rc = 0 ] && says "PASS timers"'
+rm "$T/running_claw-sync.service" "$T/nonext_claw-sync.timer"
 
 git -C "$T/dev" commit -q --allow-empty -m two && git -C "$T/dev" push -q origin main 2>/dev/null && git -C "$OC/.openclaw" fetch -q
 run; check "deploy pending (HEAD behind origin/main): FAIL" eval '[ $rc = 1 ] && says "FAIL gateway:" && says "a deploy is pending"'
