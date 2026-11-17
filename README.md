@@ -10,7 +10,7 @@ Config, rules and host plumbing for a personal AI assistant on [OpenClaw](https:
 - You message the assistant on Telegram. The assistant (OpenClaw, Linux user `openclaw`) answers, keeps memory and to-dos, reads your calendar.
 - To change code or its own config, the assistant hands the work to **Claude Code** (user `coder`), which opens a PR.
 - PRs go through **`agent-git`** (user `gitbot`), the only holder of a GitHub write token. It pushes only `agent/*` and `claude/*` branches and never merges.
-- You review and merge on your phone. **`claw-sync`** deploys `main` within 5 minutes, validating first and rolling back if the gateway doesn't come up healthy.
+- You review and merge on your phone. **`claw-sync`** deploys `main` within about a minute, validating first and rolling back if the gateway doesn't come up healthy.
 - Host plumbing (`infra/`) is never auto-deployed. The admin user applies it with `sudo claw-install`, which shows the diff first.
 
 ## Layout

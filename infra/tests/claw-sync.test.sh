@@ -6,6 +6,7 @@ set -uo pipefail
 SYNC=$(cd "$(dirname "$0")/.." && pwd)/claw-sync
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export CLAW_SYNC_HOME=$T/home CLAW_SYNC_HEALTH_WAIT=0 CLAW_SYNC_IDLE_WAIT=0
+export CLAW_SYNC_FULL_EVERY=0   # every run is a full run, except in the idle fast-path tests at the end
 unset HEALTHCHECKS_PING_URL
 H=$CLAW_SYNC_HOME BIN=$H/.npm-global/bin
 mkdir -p "$BIN"
@@ -32,7 +33,7 @@ cat > "$BIN/openclaw" <<EOF
 case "\$1 \$2" in
   "config validate") [ -e "$H/kill_on_validate" ] && kill -9 "\$(ps -o ppid= -p \$PPID)"   # claw-sync, not the \$( ) subshell
     grep -q INVALID "$H/.openclaw/openclaw.json" && { echo "Config needs correction: bad key"; exit 1; }; echo "Config valid" ;;
-  "gateway health") [ ! -e "$H/gw_down" ] && ! grep -q CRASH "$H/gw_cfg" ;;
+  "gateway health") echo health >> "$H/health"; [ ! -e "$H/gw_down" ] && ! grep -q CRASH "$H/gw_cfg" ;;
   *) exit 2 ;;
 esac
 EOF
@@ -57,7 +58,7 @@ echo 'HEALTHCHECKS_PING_URL="https://hc.example/uuid"' > "$H/.openclaw/.env"   #
 cp "$H/.openclaw/openclaw.json" "$H/gw_cfg"
 
 fails=0
-run() { : > "$H/pings"; : > "$H/restarts"; (bash "$SYNC" > "$T/out" 2>&1; exit $?) 2>/dev/null; rc=$?; }  # subshell keeps "Killed" notices quiet
+run() { : > "$H/pings"; : > "$H/restarts"; : > "$H/health"; (bash "$SYNC" > "$T/out" 2>&1; exit $?) 2>/dev/null; rc=$?; }  # subshell keeps "Killed" notices quiet
 check() {  # check <name> <condition...>
   local name=$1; shift
   # the ERR trap must only fire on real crashes, not on handled failures
@@ -194,6 +195,45 @@ run; check "fetch recovers: counter reset" \
 mv "$T/origin.git" "$T/gone.git"
 run; check "fetch failure after recovery: counts from 1 again" \
   eval '[ $rc = 0 ] && [ "$(cat "$S/fetch-fails")" = 1 ] && ! pinged /fail ""'
+mv "$T/gone.git" "$T/origin.git"
+
+# Idle fast path: with the timer every minute, idle runs within FULL_EVERY of the last good full run
+# skip the health check and ping. Anything that needs deploying always gets a full run.
+export CLAW_SYNC_FULL_EVERY=300
+quiet() { [ $rc = 0 ] && [ ! -s "$H/pings" ] && [ ! -s "$H/health" ] && [ ! -s "$T/out" ]; }
+rm -f "$S/last-full"
+run; check "full run records last-full" eval '[ $rc = 0 ] && pinged "" "up to date" && [ -s "$S/last-full" ]'
+run; check "idle within 5 min: no health check, no ping, no output" eval 'quiet'
+echo $(( $(date +%s) - 301 )) > "$S/last-full"
+run; check "idle after 5 min: full run with health check + ping" \
+  eval '[ $rc = 0 ] && [ -s "$H/health" ] && pinged "" "up to date"'
+c18=$(commit '{"v":8}' workspace.md)
+run; check "main moved within 5 min: synced + pinged" eval '[ $rc = 0 ] && head_is $c18 && pinged "" "synced"'
+c19=$(commit '{"v":19}')
+run; check "config change within 5 min: deployed" eval '[ $rc = 0 ] && head_is $c19 && restarts 1 && pinged "" "deployed"'
+echo '{"drift":4}' > "$H/.openclaw/openclaw.json"
+run; check "drift within 5 min: reverted + restarted" \
+  eval '[ $rc = 0 ] && head_is $c19 && git -C "$H/.openclaw" diff --quiet && restarts 1'
+echo "$c19" > "$S/pending"
+run; check "pending marker within 5 min: resumed" eval '[ $rc = 0 ] && restarts 1 && pinged "" "deployed ${c19:0:7}" && [ ! -e "$S/pending" ]'
+echo "$c19" > "$S/bad"; echo "$c19" > "$S/good"; date +%s > "$S/last-full"
+run; check "main marked bad within 5 min: keeps failing ping" eval '[ $rc = 1 ] && pinged /fail "marked bad"'
+rm "$S/bad"
+echo $(( $(date +%s) + 86400 )) > "$S/last-full"
+run; check "forged future last-full while idle: full run" eval '[ $rc = 0 ] && pinged "" "up to date"'
+echo $(( $(date +%s) + 86400 )) > "$S/last-full"
+c20=$(commit '{"v":20}')
+run; check "forged future last-full: doesn't suppress a deploy" eval '[ $rc = 0 ] && head_is $c20 && pinged "" "deployed"'
+echo 'not-a-number' > "$S/last-full"
+run; check "garbage last-full: full run" eval '[ $rc = 0 ] && pinged "" "up to date"'
+echo $(( $(date +%s) - 301 )) > "$S/last-full"; touch "$H/gw_down"
+run; check "unhealthy full run: fail ping" eval '[ $rc = 1 ] && pinged /fail "not healthy"'
+rm "$H/gw_down"
+run; check "after a failed full run: next run is full again" eval '[ $rc = 0 ] && pinged "" "up to date"'
+run; check "then quiet again" eval 'quiet'
+mv "$T/origin.git" "$T/gone.git"
+run; check "fetch failure while idle: still counted" eval '[ "$(cat "$S/fetch-fails")" = 1 ]'
+run; run; check "3 fetch failures while idle: fail ping" eval '[ $rc = 1 ] && pinged /fail "git fetch failed 3 runs in a row"'
 mv "$T/gone.git" "$T/origin.git"
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

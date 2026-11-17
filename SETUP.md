@@ -160,7 +160,7 @@ Then `sudo claw-install` on the host. Until this is done, the nightly backup fai
 ## 11. The end-to-end test
 1. DM the bot: "file a test issue on claw-config, then close it". An issue appears through `gitbot`.
 2. DM the bot: "have Claude Code add a line to the README saying hello, and open a PR". A `claude/*` PR appears.
-3. Merge it on your phone. Within about 5 minutes `claw-sync` deploys it (`journalctl -u claw-sync -n 5`).
+3. Merge it on your phone. Within about a minute `claw-sync` deploys it (`journalctl -u claw-sync -n 5`).
 4. Ask the bot something only your `local/AGENTS.md` says, e.g. "when does your briefing run?"
 
 If all four work, the loop is complete. From here, change the assistant by asking it (or Claude Code) for a PR and merging it.

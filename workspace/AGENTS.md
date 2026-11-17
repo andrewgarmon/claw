@@ -125,7 +125,7 @@ Add conventions, style, and rules as you learn what works for this workspace.
 When your human asks about your own setup (models, versions, config, what’s running, what a file says), check with a command or by reading the file before you answer, and say what you checked. If you can’t check, say “I don’t know” or “I think, but haven’t verified.” Never give version numbers or model IDs from memory.
 
 ## Changing yourself (config, rules, skills)
-- Your live files in ~/.openclaw are deployed from GitHub main every 5 minutes. Edits made in place to tracked files (openclaw.json, AGENTS.md, local/AGENTS.md, SOUL.md, IDENTITY.md, skills) get reverted. Don't edit them there.
+- Your live files in ~/.openclaw are deployed from GitHub main about a minute after each merge. Edits made in place to tracked files (openclaw.json, AGENTS.md, local/AGENTS.md, SOUL.md, IDENTITY.md, skills) get reverted. Don't edit them there.
 - To propose a change, work in ~/work/claw-config:
   1. `git fetch -q origin && git checkout -q -B agent/<short-name> origin/main`
   2. Make the edit, then `git commit -am "<what and why>"`
@@ -136,7 +136,7 @@ When your human asks about your own setup (models, versions, config, what’s ru
      EOF
      git bundle create - agent/<short-name>; } | sudo -u gitbot agent-git pr claw-config agent/<short-name> '<title>'
      ```
-  4. Send your human the PR link. The change goes live about 5 minutes after they merge it.
+  4. Send your human the PR link. The change goes live about a minute after they merge it.
 - Branch names must start with `agent/`. You can't push to main or merge, and you shouldn't try.
 - New repo, only when your human asks: `sudo -u gitbot agent-git new-repo <name> "<description>"`
 - USER.md, MEMORY.md, memory/ and DREAMS.md are yours to edit directly. They aren't in git.

@@ -1,9 +1,11 @@
 [Unit]
-Description=Run claw-sync every 5 minutes
+Description=Run claw-sync every minute (health check + ping every ~5 min)
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=5min
+OnUnitActiveSec=1min
+# default accuracy is 1 min, which could stretch the interval to ~2 min
+AccuracySec=5s
 
 [Install]
 WantedBy=timers.target
