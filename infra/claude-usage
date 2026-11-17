@@ -3,7 +3,8 @@
 # Runs as coder, whose Claude Code login it reads:  sudo -n -u coder /usr/local/bin/claude-usage [--fresh]
 # (openclaw may run exactly this through infra/coder.sudoers). Installed root-owned by claw-install.
 # No model call is made. A call takes ~10s (Claude Code startup), so answers are cached for 10 min in
-# coder's ~/.cache; --fresh skips the cache. coder can write that cache, so treat it as advisory.
+# coder's ~/.cache; --fresh skips the cache. coder can write that cache, so a hit is re-validated by the
+# .mjs (strict fields only) before it's printed; anything else falls through to a fresh read.
 # Exit codes: 0 JSON; 3 plan limits unavailable (not logged in / no profile scope); 1 other errors.
 set -euo pipefail
 export HOME=/home/coder
@@ -21,13 +22,15 @@ case "${1:-}" in
   *) echo "usage: claude-usage [--fresh]" >&2; exit 1 ;;
 esac
 
+cd /srv/work 2>/dev/null || cd "$HOME"   # sudo keeps the caller's cwd, which coder may not be able to read
 if [ "$fresh" = 0 ] && [ -f "$CACHE" ] && [ ! -L "$CACHE" ]; then
   age=$(( $(date +%s) - $(stat -c %Y "$CACHE") ))
   # a future mtime counts as stale, so a touched file can't pin an old answer forever
-  if [ "$age" -ge 0 ] && [ "$age" -lt "$MAX_AGE" ]; then cat "$CACHE"; exit 0; fi
+  if [ "$age" -ge 0 ] && [ "$age" -lt "$MAX_AGE" ] && out=$(timeout 10 node "$SCRIPT" --cached "$CACHE" 2>/dev/null); then
+    printf '%s\n' "$out"; exit 0
+  fi
 fi
 
-cd /srv/work 2>/dev/null || cd "$HOME"
 rc=0
 out=$(timeout "$WAIT" node "$SCRIPT") || rc=$?
 if [ "$rc" != 0 ]; then
