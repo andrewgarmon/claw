@@ -35,11 +35,14 @@ run() { : > "$T/curl.log"; bash "$CB" > "$T/out" 2>&1; rc=$?; }
 echo "v1" > "$H/.openclaw/workspace/MEMORY.md"
 run
 check "good push: exit 0, no fail ping" '[ $rc = 0 ] && grep -q "pushed" "$T/out" && [ ! -s "$T/curl.log" ]'
+check "good push: last-ok touched" '[ -e "$H/.cache/claw-backup/last-ok" ]'
+touch -d '2 days ago' "$H/.cache/claw-backup/last-ok"
 
 echo "v2" > "$H/.openclaw/workspace/MEMORY.md"; touch "$T/reject"
 run
 check "refused push: non-zero exit and a /fail ping with the reason" \
   '[ $rc != 0 ] && grep -q "hc.example/check/fail" "$T/curl.log" && grep -q "claw-backup failed on" "$T/curl.log"'
+check "refused push: last-ok not touched" '[ -z "$(find "$H/.cache/claw-backup/last-ok" -newermt "1 day ago")" ]'
 check "refused push: not recorded as pushed, so the next run retries" '! grep -q "$(git -C "$H/.openclaw/state-backup" rev-parse HEAD)" "$H/.cache/claw-backup/pushed"'
 
 : > "$H/.openclaw/.env"
@@ -49,6 +52,9 @@ rm "$T/reject"
 
 run
 check "nothing new after a good retry: exit 0, no ping" '[ $rc = 0 ] && [ ! -s "$T/curl.log" ]'
+touch -d '2 days ago' "$H/.cache/claw-backup/last-ok"
+run
+check "nothing new: still touches last-ok" '[ $rc = 0 ] && grep -q "nothing new" "$T/out" && [ -n "$(find "$H/.cache/claw-backup/last-ok" -newermt "1 minute ago")" ]'
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

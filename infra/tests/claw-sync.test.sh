@@ -57,6 +57,7 @@ c1=$(commit '{"v":1}')
 git clone -q "$T/origin.git" "$H/.openclaw"
 echo 'HEALTHCHECKS_PING_URL="https://hc.example/uuid"' > "$H/.openclaw/.env"   # untracked, like prod
 cp "$H/.openclaw/openclaw.json" "$H/gw_cfg"
+mkdir -p "$H/.cache/claw-backup" && touch "$H/.cache/claw-backup/last-ok"   # a fresh backup, as on a healthy host
 
 fails=0
 run() { : > "$H/pings"; : > "$H/restarts"; : > "$H/health"; (bash "$SYNC" > "$T/out" 2>&1; exit $?) 2>/dev/null; rc=$?; }  # subshell keeps "Killed" notices quiet
@@ -248,5 +249,24 @@ for _ in $(seq 14); do run; done
 check "default threshold: 14 fetch failures (~14 min) don't fail-ping" eval '[ "$(cat "$S/fetch-fails")" = 14 ] && ! pinged /fail ""'
 run; check "default threshold: the 15th does" eval '[ $rc = 1 ] && pinged /fail "git fetch failed 15 runs in a row"'
 mv "$T/gone.git" "$T/origin.git"
+
+# Stale-backup alert: claw-backup touches last-ok on every success; a full run fails the ping when
+# it's older than 26h, without clearing last-full (so it rechecks every ~5 min, not every minute).
+B=$H/.cache/claw-backup/last-ok
+touch -d '27 hours ago' "$B"; rm -f "$S/last-full"
+run; check "backup older than 26h: fail ping with the reason" \
+  eval '[ $rc = 1 ] && pinged /fail "claw-backup hasn.t succeeded in 27h" && ! pinged "" "up to date"'
+check "stale backup keeps last-full, so the next minute stays quiet" eval '[ -s "$S/last-full" ]'
+run; check "stale backup: quiet in between" eval 'quiet'
+rm -f "$S/last-full"
+run; check "stale backup: still failing on the next full run" eval '[ $rc = 1 ] && pinged /fail "27h"'
+rm "$B"; rm -f "$S/last-full"
+run; check "no last-ok at all: fail ping" eval '[ $rc = 1 ] && pinged /fail "no recorded success"'
+touch -d '25 hours ago' "$B"; rm -f "$S/last-full"
+run; check "backup 25h old: healthy" eval '[ $rc = 0 ] && pinged "" "up to date"'
+touch -d '27 hours ago' "$B"; c22=$(commit '{"v":22}')
+run; check "stale backup doesn't block a deploy" eval '[ $rc = 1 ] && head_is $c22 && restarts 1 && pinged /fail "27h"'
+touch "$B"; rm -f "$S/last-full"
+run; check "backup succeeds again: healthy" eval '[ $rc = 0 ] && pinged "" "up to date"'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

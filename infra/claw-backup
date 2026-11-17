@@ -6,6 +6,8 @@
 # - commits only when something changed, so the history is one commit per day with changes
 # - publishes through agent-git like any other agent push: branch agent/state/<host>,
 #   with one long-lived PR on claw-state that it keeps updating. Nothing needs merging.
+# - every successful run, including "nothing new", touches ~/.cache/claw-backup/last-ok; claw-sync
+#   fails its health ping when that's over 26h old (a backup timer that stopped running)
 set -euo pipefail
 export HOME=/home/openclaw
 export PATH=/usr/local/bin:/usr/bin:/bin
@@ -28,7 +30,8 @@ fail_ping() {
 }
 on_exit() {
   local rc=$?
-  [ "$rc" = 0 ] || fail_ping "claw-backup failed on $host (exit $rc), backup not pushed: sudo journalctl -u claw-backup -n 20"
+  [ "$rc" != 0 ] || { touch "$STATE/last-ok"; return 0; }
+  fail_ping "claw-backup failed on $host (exit $rc), backup not pushed: sudo journalctl -u claw-backup -n 20"
 }
 trap on_exit EXIT
 
