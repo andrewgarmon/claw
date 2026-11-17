@@ -36,8 +36,9 @@ hc() {  # hc [fail] message
   [ -n "$HC" ] || return 0
   curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$*" "$HC$path" || echo "healthcheck ping failed" >&2
 }
-die() { echo "$*" >&2; hc fail "$*"; exit 1; }
-trap 'hc fail "claw-sync crashed at line $LINENO"' ERR
+# any failure clears last-full, so the next run is a full one and reports recovery promptly
+die() { rm -f "$STATE/last-full"; echo "$*" >&2; hc fail "$*"; exit 1; }
+trap 'rm -f "$STATE/last-full"; hc fail "claw-sync crashed at line $LINENO"' ERR
 target="" bad="" want=""
 ok() {  # success ping, but keep failing while origin/main is marked bad
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"

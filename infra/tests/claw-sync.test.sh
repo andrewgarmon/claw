@@ -236,6 +236,10 @@ run; check "unhealthy full run: fail ping" eval '[ $rc = 1 ] && pinged /fail "no
 rm "$H/gw_down"
 run; check "after a failed full run: next run is full again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 run; check "then quiet again" eval 'quiet'
+touch "$H/gw_down"; c21=$(commit '{"v":20}' workspace.md)
+run; check "failure within 5 min of a full run: fail ping" eval '[ $rc = 1 ] && head_is $c21 && pinged /fail "not healthy"'
+rm "$H/gw_down"
+run; check "next run after that failure is full, not quiet" eval '[ $rc = 0 ] && pinged "" "up to date"'
 mv "$T/origin.git" "$T/gone.git"
 run; check "fetch failure while idle: still counted" eval '[ "$(cat "$S/fetch-fails")" = 1 ]'
 run; run; check "3 fetch failures while idle: fail ping" eval '[ $rc = 1 ] && pinged /fail "git fetch failed 3 runs in a row"'
