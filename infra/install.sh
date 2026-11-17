@@ -45,6 +45,10 @@ broker_prune brokers
 command -v curl >/dev/null || apt-get install -y curl   # claw-sync healthchecks pings
 install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
 install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
+install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
+# claw-sync alerts when claw-backup's last-ok is over 26h old; a new host gets 26h before the first
+# nightly run. Created as openclaw, so root never writes into the agent's home.
+(cd / && sudo -u openclaw sh -c '[ -e "$1/last-ok" ] || { mkdir -p "$1" && touch "$1/last-ok"; }' _ /home/openclaw/.cache/claw-backup)
 install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
 
 # --- Claude Code as coder (ACP target)

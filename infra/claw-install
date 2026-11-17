@@ -19,6 +19,7 @@ TOKEN_FILE=/home/coder/.config/coder.env
 STATE=/var/lib/claw-install
 WORK_BASE=/root
 SELF=/usr/local/sbin/claw-install
+SMOKE=/usr/local/bin/claw-smoke
 
 die() { echo "claw-install: $*" >&2; exit 1; }
 
@@ -113,6 +114,16 @@ main() {
     echo "updated $SELF"
   fi
   echo "installed ${sha:0:7}"
+
+  # check the live wiring (read-only). A failure doesn't undo the install, but it's the last line.
+  [ -x "$SMOKE" ] || return 0
+  echo "running claw-smoke"
+  if "$SMOKE"; then
+    echo "installed ${sha:0:7}; smoke test passed"
+  else
+    echo "installed ${sha:0:7}, but the smoke test FAILED (see above; re-run: sudo claw-smoke)" >&2
+    exit 1
+  fi
 }
 
 main "$@"

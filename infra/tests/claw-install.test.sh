@@ -17,8 +17,9 @@ sed -e "s|^export PATH=.*|export PATH=$BIN:/usr/bin:/bin|" \
     -e "s|^TOKEN_FILE=.*|TOKEN_FILE=$T/coder.env|" \
     -e "s|^STATE=.*|STATE=$T/state|" \
     -e "s|^WORK_BASE=.*|WORK_BASE=$T/work|" \
-    -e "s|^SELF=.*|SELF=$T/sbin/claw-install|" "$INFRA/claw-install" > "$CI"
-[ "$(grep -c "$T" "$CI")" = 7 ] || { echo "FAIL could not point claw-install at the test dir (did its constants change?)"; exit 1; }
+    -e "s|^SELF=.*|SELF=$T/sbin/claw-install|" \
+    -e "s|^SMOKE=.*|SMOKE=$T/claw-smoke|" "$INFRA/claw-install" > "$CI"
+[ "$(grep -c "$T" "$CI")" = 8 ] || { echo "FAIL could not point claw-install at the test dir (did its constants change?)"; exit 1; }
 
 # fake id: root unless $T/not_root; any other query (e.g. `id openclaw`) fails
 cat > "$BIN/id" <<EOF
@@ -79,6 +80,7 @@ check "records the installed commit" eval '[ "$(last)" = "$sha1" ]'
 check "deletes the clone afterwards" work_empty
 check "installs itself from the clone" eval 'cmp -s "$T/sbin/claw-install" "$INFRA/claw-install" && says "updated $T/sbin/claw-install"'
 check "first install lists infra/" eval 'says "no previous install recorded" && says "infra/install.sh"'
+check "no claw-smoke installed: skipped quietly" eval '! says "claw-smoke"'
 check "token reaches git only through the env, never argv or output" \
   eval 'grep -q "\[clone\]" "$T/git.log" && ! grep -q "$TOKEN" "$T/git.log" "$T/out"'
 
@@ -92,6 +94,17 @@ sha2=$(git -C "$T/dev" rev-parse HEAD)
 run -y
 check "shows infra/ commits and diffstat since the last install" \
   eval '[ $rc = 0 ] && says "infra/ changes since the last install (${sha1:0:7})" && says "installer: v2" && says "install.sh |" && [ "$(last)" = "$sha2" ] && grep -q "^v2 " "$T/installed"'
+
+# ---------- smoke test after the install ----------
+printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"; chmod +x "$T/claw-smoke"
+run -y
+check "smoke test passes: says so last, exit 0" \
+  eval '[ $rc = 0 ] && says "PASS fake-check" && [ "$(tail -n1 "$T/out")" = "installed ${sha2:0:7}; smoke test passed" ]'
+printf '#!/bin/bash\necho "FAIL fake-check: broken"\nexit 1\n' > "$T/claw-smoke"
+run -y
+check "smoke test fails: exit 1, says so last, install still recorded" \
+  eval '[ $rc = 1 ] && says "FAIL fake-check" && tail -n1 "$T/out" | grep -q "smoke test FAILED" && [ "$(last)" = "$sha2" ]'
+rm "$T/claw-smoke"
 
 # ---------- refusals ----------
 fake_installer v3
