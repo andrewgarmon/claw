@@ -14,11 +14,12 @@ export CLAW_SMOKE_WAIT=3
 sed -e "s|^export PATH=.*|export PATH=$BIN:/usr/local/bin:/usr/bin:/bin|" \
     -e "s|^ACP_LOCK=.*|ACP_LOCK=$T/lib/package-lock.json|" \
     -e "s|^CODER_ACP=.*|CODER_ACP=$BIN/coder-acp|" \
+    -e "s|^CLAUDE_USAGE=.*|CLAUDE_USAGE=$BIN/claude-usage|" \
     -e "s|^AGENT_GIT=.*|AGENT_GIT=$BIN/agent-git|" \
     -e "s|^AGENT_CAL=.*|AGENT_CAL=$BIN/agent-cal|" \
     -e "s|^CAL_SECRET=.*|CAL_SECRET=$T/calbot/caldav.env|" \
     -e "s|^OC_HOME=.*|OC_HOME=$OC|" "$INFRA/smoke.sh" > "$SM"
-[ "$(grep -c "$T" "$SM")" = 7 ] || { echo "FAIL could not point claw-smoke at the test dir (did its constants change?)"; exit 1; }
+[ "$(grep -c "$T" "$SM")" = 8 ] || { echo "FAIL could not point claw-smoke at the test dir (did its constants change?)"; exit 1; }
 
 cat > "$T/lib/package-lock.json" <<'EOF'
 {"name": "claw-acp-adapter", "lockfileVersion": 3,
@@ -51,6 +52,15 @@ v=\$(cat "$T/acp_version" 2>/dev/null || echo 0.107.3)
 [ -e "$T/acp_noinfo" ] && { echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'; exit 0; }
 echo '{"jsonrpc":"2.0","method":"noise"}'
 echo "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"x\",\"version\":\"\$v\"}}}"
+EOF
+# fake claude-usage: JSON like the real one; $T/usage_unavailable -> exit 3, $T/usage_bad -> exit 1
+cat > "$BIN/claude-usage" <<EOF
+#!/bin/bash
+[ "\$FAKE_CALLER" = openclaw ] && [ "\$FAKE_AS" = coder ] && [ "\$1" = --fresh ] || exit 1
+echo "token=$SECRET" >&2
+[ -e "$T/usage_unavailable" ] && exit 3
+[ -e "$T/usage_bad" ] && { echo '{"seven_day":null}'; exit 0; }
+echo '{"subscription_type":"pro","five_hour":{"utilization":36,"resets_at":"x"},"seven_day":{"utilization":43,"resets_at":"y"}}'
 EOF
 # fake agent-git: issue-list (fails while $T/token_bad), pr refusals like the real one (unless $T/no_refuse)
 cat > "$BIN/agent-git" <<EOF
@@ -109,15 +119,16 @@ says() { grep -q -- "$1" "$T/out"; }   # basic regex: "." stands in for apostrop
 
 run
 check "all good: every check passes, exit 0" \
-  eval '[ $rc = 0 ] && says "PASS acp-adapter" && says "PASS agent-git-token" && says "PASS agent-git-refusals" && says "PASS timers" && says "PASS gateway" && says "PASS agent-cal" && says "all 6 checks passed"'
+  eval '[ $rc = 0 ] && says "PASS acp-adapter" && says "PASS agent-git-token" && says "PASS agent-git-refusals" && says "PASS timers" && says "PASS gateway" && says "PASS agent-cal" && says "PASS claude-usage" && says "all 7 checks passed"'
 check "ACP adapter runs as openclaw -> coder, the way acpx does" eval 'grep -q "^openclaw -> coder: $BIN/coder-acp" "$T/sudo.log"'
+check "claude-usage runs as openclaw -> coder, fresh" eval 'grep -q "^openclaw -> coder: $BIN/claude-usage" "$T/sudo.log"'
 check "refusals are tried as coder and as openclaw, never as root" \
   eval 'grep -q "^coder pr claw-state agent/state/claw-smoke" "$T/agent-git.log" && grep -q "^openclaw pr claw-state claude/claw-smoke" "$T/agent-git.log" && ! grep -q "^root " "$T/agent-git.log"'
 check "agent-cal: only the read-only verb" eval '[ ! -e "$T/cal-writes" ]'
 
 echo 0.106.0 > "$T/acp_version"
 run; check "wrong adapter version: FAIL with both versions, exit 1" \
-  eval '[ $rc = 1 ] && says "FAIL acp-adapter: adapter is 0.106.0 but the lockfile pins 0.107.3" && says "1 of 6 checks FAILED"'
+  eval '[ $rc = 1 ] && says "FAIL acp-adapter: adapter is 0.106.0 but the lockfile pins 0.107.3" && says "1 of 7 checks FAILED"'
 echo '1.0; rm -rf /' > "$T/acp_version"
 run; check "odd version string isn't echoed" eval '[ $rc = 1 ] && says "no usable agent version" && ! says "rm -rf"'
 rm "$T/acp_version"
@@ -131,6 +142,15 @@ rm "$T/acp_noinfo"
 mv "$T/lib/package-lock.json" "$T/lib/lock.bak"
 run; check "ACP not installed (no lockfile): FAIL" eval '[ $rc = 1 ] && says "FAIL acp-adapter: can.t read the pinned version"'
 mv "$T/lib/lock.bak" "$T/lib/package-lock.json"
+
+touch "$T/usage_unavailable"
+run; check "claude-usage without plan limits (exit 3): SKIP, still passes" \
+  eval '[ $rc = 0 ] && says "SKIP claude-usage: plan limits unavailable" && says "all 6 checks passed (1 skipped)"'
+rm "$T/usage_unavailable"; touch "$T/usage_bad"
+run; check "claude-usage without a weekly number: FAIL" eval '[ $rc = 1 ] && says "FAIL claude-usage: no usable answer (exit 0)"'
+rm "$T/usage_bad"; chmod -x "$BIN/claude-usage"
+run; check "claude-usage not runnable: FAIL" eval '[ $rc = 1 ] && says "FAIL claude-usage: no usable answer"'
+chmod +x "$BIN/claude-usage"
 
 touch "$T/token_bad"
 run; check "gitbot token revoked: FAIL, points at the log, no secret" \
@@ -160,14 +180,14 @@ rm "$T/gw_down"
 touch "$T/cal_bad"
 run; check "calendar password broken: FAIL" eval '[ $rc = 1 ] && says "FAIL agent-cal: listing calendars failed"'
 rm "$T/cal_bad" "$T/calbot/caldav.env"
-run; check "no CalDAV secret: SKIP, still passes" eval '[ $rc = 0 ] && says "SKIP agent-cal: no CalDAV secret yet" && says "all 5 checks passed (1 skipped)"'
+run; check "no CalDAV secret: SKIP, still passes" eval '[ $rc = 0 ] && says "SKIP agent-cal: no CalDAV secret yet" && says "all 6 checks passed (1 skipped)"'
 mv "$BIN/agent-cal" "$T/agent-cal.off"
 run; check "cal broker not installed: SKIP" eval '[ $rc = 0 ] && says "SKIP agent-cal: broker not installed"'
 mv "$T/agent-cal.off" "$BIN/agent-cal"
 
 touch "$T/token_bad" "$T/gw_down"
 run; check "several failures: each listed, count in the last line" \
-  eval '[ $rc = 1 ] && says "FAIL agent-git-token" && says "FAIL gateway" && [ "$(tail -n1 "$T/out")" = "claw-smoke: 2 of 5 checks FAILED" ]'
+  eval '[ $rc = 1 ] && says "FAIL agent-git-token" && says "FAIL gateway" && [ "$(tail -n1 "$T/out")" = "claw-smoke: 2 of 6 checks FAILED" ]'
 rm "$T/token_bad" "$T/gw_down"
 
 printf '#!/bin/bash\necho 1000\n' > "$BIN/id"

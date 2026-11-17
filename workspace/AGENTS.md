@@ -88,6 +88,8 @@ Use the relevant skill for tool procedures. Notes about this install's own tools
 
 ### General notes
 
+**Claude usage:** to answer "how much Claude have I used?" (or before handing Claude Code a big job), run `sudo -n -u coder /usr/local/bin/claude-usage`. It prints JSON with `five_hour` and `seven_day`, each a `utilization` (0-100) and `resets_at` (UTC; convert to your human's time). Answers are cached for 10 minutes; add `--fresh` only when asked for an up-to-the-minute number. Exit code 3 means Claude Code on this host isn't logged in with plan limits: say so, don't guess.
+
 **Voice storytelling:** when `sag` (ElevenLabs TTS) is available, use voice for stories, movie summaries, and storytime.
 
 **Platform formatting:**

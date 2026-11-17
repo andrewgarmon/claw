@@ -12,6 +12,7 @@ set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ACP_LOCK=/usr/local/lib/claw/acp/package-lock.json
 CODER_ACP=/usr/local/bin/coder-acp
+CLAUDE_USAGE=/usr/local/bin/claude-usage
 AGENT_GIT=/usr/local/bin/agent-git
 AGENT_CAL=/usr/local/bin/agent-cal
 CAL_SECRET=/home/calbot/.config/caldav.env
@@ -55,6 +56,20 @@ sys.exit(1)' < "$OUT/acp" 2>/dev/null) \
   [[ "$got" =~ ^[0-9A-Za-z.+-]{1,40}$ ]] || { FAIL acp-adapter "initialize reply has no usable agent version"; return; }
   [ "$got" = "$want" ] || { FAIL acp-adapter "adapter is $got but the lockfile pins $want (re-run: sudo claw-install)"; return; }
   PASS acp-adapter
+}
+
+# 1b. Plan usage is readable (claude-usage, as openclaw -> coder). One call to the usage endpoint, no
+#     model call. Skipped when Claude Code isn't logged in with plan limits (exit 3).
+check_usage() {
+  local rc WAIT=$(( WAIT * 3 ))   # a fresh read starts Claude Code (~10s)
+  via openclaw coder "$CLAUDE_USAGE" --fresh > "$OUT/usage" 2>/dev/null; rc=$?
+  if [ $rc = 3 ]; then SKIP claude-usage "plan limits unavailable (Claude Code not logged in as coder, or no profile scope)"; return; fi
+  if [ $rc = 0 ] && python3 -I -c 'import json,sys
+d = json.load(sys.stdin); w = d.get("seven_day") or {}
+sys.exit(0 if isinstance(w.get("utilization"), (int, float)) else 1)' < "$OUT/usage" 2>/dev/null; then
+    PASS claude-usage; return
+  fi
+  FAIL claude-usage "no usable answer ($(exited $rc)); try: sudo -u coder claude-usage --fresh"
 }
 
 # 2. agent-git works for openclaw and gitbot's token is valid: one read-only GitHub API call.
@@ -129,6 +144,7 @@ check_cal() {
 }
 
 check_acp
+check_usage
 check_git_token
 check_git_refusals
 check_timers

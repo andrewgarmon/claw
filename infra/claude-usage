@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# claude-usage: the Claude plan's 5-hour and weekly utilization (0-100) and reset times, as JSON.
+# Runs as coder, whose Claude Code login it reads:  sudo -n -u coder /usr/local/bin/claude-usage [--fresh]
+# (openclaw may run exactly this through infra/coder.sudoers). Installed root-owned by claw-install.
+# No model call is made. A call takes ~10s (Claude Code startup), so answers are cached for 10 min in
+# coder's ~/.cache; --fresh skips the cache. coder can write that cache, so a hit is re-validated by the
+# .mjs (strict fields only) before it's printed; anything else falls through to a fresh read.
+# Exit codes: 0 JSON; 3 plan limits unavailable (not logged in / no profile scope); 1 other errors.
+set -euo pipefail
+export HOME=/home/coder
+export PATH=/usr/local/bin:/usr/bin:/bin
+SCRIPT=/usr/local/lib/claw/claude-usage.mjs
+CACHE=$HOME/.cache/claude-usage.json
+MAX_AGE=600   # seconds
+WAIT=${CLAUDE_USAGE_WAIT:-45}   # override only for tests
+
+[ "$(id -un)" = coder ] || { echo "claude-usage: run as coder: sudo -n -u coder claude-usage" >&2; exit 1; }
+fresh=0
+case "${1:-}" in
+  --fresh) fresh=1 ;;
+  "") ;;
+  *) echo "usage: claude-usage [--fresh]" >&2; exit 1 ;;
+esac
+
+cd /srv/work 2>/dev/null || cd "$HOME"   # sudo keeps the caller's cwd, which coder may not be able to read
+if [ "$fresh" = 0 ] && [ -f "$CACHE" ] && [ ! -L "$CACHE" ]; then
+  age=$(( $(date +%s) - $(stat -c %Y "$CACHE") ))
+  # a future mtime counts as stale, so a touched file can't pin an old answer forever
+  if [ "$age" -ge 0 ] && [ "$age" -lt "$MAX_AGE" ] && out=$(timeout 10 node "$SCRIPT" --cached "$CACHE" 2>/dev/null); then
+    printf '%s\n' "$out"; exit 0
+  fi
+fi
+
+rc=0
+out=$(timeout "$WAIT" node "$SCRIPT") || rc=$?
+if [ "$rc" != 0 ]; then
+  [ "$rc" = 124 ] && echo "claude-usage: no answer within ${WAIT}s" >&2
+  exit "$rc"
+fi
+mkdir -p "$(dirname "$CACHE")"
+printf '%s\n' "$out" > "$CACHE.new" && mv -f "$CACHE.new" "$CACHE"
+printf '%s\n' "$out"
