@@ -1,2 +1,5 @@
-Defaults!/usr/local/bin/coder-acp env_reset, !setenv
-openclaw ALL=(coder) NOPASSWD: /usr/local/bin/coder-acp
+# openclaw may run exactly these as coder: the ACP adapter (acpx) and the plan-usage reader.
+# env_reset + !setenv: nothing from the gateway's environment reaches coder.
+Cmnd_Alias CLAW_AS_CODER = /usr/local/bin/coder-acp, /usr/local/bin/claude-usage
+Defaults!CLAW_AS_CODER env_reset, !setenv
+openclaw ALL=(coder) NOPASSWD: CLAW_AS_CODER

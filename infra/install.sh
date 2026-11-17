@@ -55,7 +55,8 @@ install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.ser
 id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
 install -d -m 755 -o coder -g coder /srv/work
 install -d -m 700 -o coder -g coder /home/coder/.config /home/coder/.claude
-install -m 755 -o root -g root coder-acp /usr/local/bin/
+install -m 755 -o root -g root coder-acp claude-usage /usr/local/bin/
+install -m 644 -o root -g root claude-usage.mjs /usr/local/lib/claw/
 # the ACP adapter coder-acp runs: exact versions from acp/package-lock.json, installed root-owned
 # (coder can run it, not change it), no install scripts. Reinstalled only when the lockfile changes;
 # built in a .new dir and swapped in, so a failed install leaves the old one working.
