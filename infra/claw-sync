@@ -10,9 +10,13 @@
 #   resumed next run (re-validated, restarted, health-checked, rolled back if needed)
 # - while main is marked bad, local drift is still reverted (to the last good commit)
 # - good/pending from the state dir are only trusted if they are on origin/main (the agent can write them)
-# - a git fetch failure only fail-pings after 3 in a row; until then it syncs against the last fetch
-# - every run checks gateway health and pings HEALTHCHECKS_PING_URL (from ~/.openclaw/.env) if set:
+# - a git fetch failure only fail-pings after $FETCH_FAIL_RUNS in a row (~15 min with the 1-min timer);
+#   until then it syncs against the last fetch
+# - a full run checks gateway health and pings HEALTHCHECKS_PING_URL (from ~/.openclaw/.env) if set:
 #   success when synced + healthy, /fail otherwise. No pings at all = claw-sync or the host is down.
+# - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
+#   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
+#   was under $FULL_EVERY seconds ago. So health checks and pings still happen about every 5 minutes.
 set -eEuo pipefail
 export HOME=${CLAW_SYNC_HOME:-/home/openclaw}   # override only for tests
 export PATH=$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
@@ -20,6 +24,8 @@ XDG_RUNTIME_DIR=/run/user/$(id -u); export XDG_RUNTIME_DIR
 STATE=$HOME/.cache/claw-sync; mkdir -p "$STATE"
 HEALTH_WAIT=${CLAW_SYNC_HEALTH_WAIT:-180}       # seconds to wait for the gateway after a restart
 IDLE_WAIT=${CLAW_SYNC_IDLE_WAIT:-60}            # ... when nothing was restarted (e.g. still booting)
+FULL_EVERY=${CLAW_SYNC_FULL_EVERY:-300}         # seconds between health checks + pings while idle
+FETCH_FAIL_RUNS=${CLAW_SYNC_FETCH_FAIL_RUNS:-15} # consecutive fetch failures before /fail (runs are 1 min apart)
 exec 9>"$STATE/lock"; flock -n 9 || exit 0
 cd "$HOME/.openclaw"
 
@@ -30,12 +36,13 @@ hc() {  # hc [fail] message
   [ -n "$HC" ] || return 0
   curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$*" "$HC$path" || echo "healthcheck ping failed" >&2
 }
-die() { echo "$*" >&2; hc fail "$*"; exit 1; }
-trap 'hc fail "claw-sync crashed at line $LINENO"' ERR
+# any failure clears last-full, so the next run is a full one and reports recovery promptly
+die() { rm -f "$STATE/last-full"; echo "$*" >&2; hc fail "$*"; exit 1; }
+trap 'rm -f "$STATE/last-full"; hc fail "claw-sync crashed at line $LINENO"' ERR
 target="" bad="" want=""
 ok() {  # success ping, but keep failing while origin/main is marked bad
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
-  hc "$*"; exit 0
+  hc "$*"; date +%s > "$STATE/last-full"; exit 0
 }
 
 healthy() {  # wait up to $1 seconds for the gateway to be active and answering health RPCs
@@ -120,7 +127,7 @@ if git fetch -q origin main; then
 else
   n=$(( $(cat "$STATE/fetch-fails" 2>/dev/null || echo 0) + 1 ))
   echo "$n" > "$STATE/fetch-fails"
-  [ "$n" -lt 3 ] || die "git fetch failed $n runs in a row"
+  [ "$n" -lt "$FETCH_FAIL_RUNS" ] || die "git fetch failed $n runs in a row"
   echo "git fetch failed ($n in a row); syncing against the last fetched origin/main" >&2
 fi
 target=$(git rev-parse origin/main)
@@ -132,6 +139,17 @@ want=$target
 if [ "$target" = "$bad" ]; then
   want=$good
   [ -n "$want" ] || die "origin/main ${target:0:7} is marked bad and there is no known-good commit on main"
+fi
+
+# Idle and checked recently: exit quietly, no health check and no ping. last-full is agent-writable, but
+# this path needs HEAD == origin/main with no drift, so a forged value can never skip a deploy or a
+# drift revert. A future, garbage or stale value means a full run. Rewriting it every minute would only
+# stop the pings, and healthchecks.io alerts on missing pings (the agent can read the ping URL anyway).
+if [ "$before" = "$target" ] && [ "$target" != "$bad" ] && [ ! -e "$STATE/pending" ] && git diff --quiet HEAD; then
+  last=$(cat "$STATE/last-full" 2>/dev/null || true)
+  case $last in ''|*[!0-9]*|???????????*) last=0 ;; esac
+  age=$(( $(date +%s) - 10#$last ))   # 10#: a leading zero would otherwise be read as octal
+  [ "$age" -lt 0 ] || [ "$age" -ge "$FULL_EVERY" ] || exit 0
 fi
 
 # Nothing to deploy: just report health.
