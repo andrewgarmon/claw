@@ -82,15 +82,20 @@ check_git_refusals() {
   if [ -z "$bad" ]; then PASS agent-git-refusals; else FAIL agent-git-refusals "$bad (see /home/gitbot/agent-git.log)"; fi
 }
 
-# 4. Timers are enabled, active and have a next run.
+# 4. Timers are enabled, active and have a next run. While a timer's service is running, systemd shows
+#    no next run until it finishes (e.g. claw-sync deploying the merge that prompted this install);
+#    that means the timer just fired, so it counts as scheduled.
 check_timers() {
-  local t next bad=
+  local t next state bad=
   for t in claw-sync.timer claw-backup.timer; do
     if ! systemctl is-enabled -q "$t" 2>/dev/null || ! systemctl is-active -q "$t" 2>/dev/null; then
       bad="${bad:+$bad; }$t isn't enabled and active"; continue
     fi
     next=$(systemctl list-timers --all --no-legend "$t" 2>/dev/null | awk 'NR == 1 { print $1 }')
-    case "$next" in ''|-|n/a) bad="${bad:+$bad; }$t has no next run" ;; esac
+    case "$next" in ''|-|n/a) ;; *) continue ;; esac
+    state=$(systemctl show -p ActiveState --value "${t%.timer}.service" 2>/dev/null)
+    case "$state" in activating|active|reloading) continue ;; esac
+    bad="${bad:+$bad; }$t has no next run"
   done
   if [ -z "$bad" ]; then PASS timers; else FAIL timers "$bad"; fi
 }
