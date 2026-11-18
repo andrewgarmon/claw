@@ -106,8 +106,9 @@ repo_visibility() {
 }
 # guard_write <repo> <verb>: call before any write. Public repos take writes from coder only:
 # Claude Code can't read the assistant's live workspace (its memory files), so it's the safer writer.
-# (Its read-only token can read claw-state: claw-backup encrypts new snapshots, but plaintext ones
-# from before encryption stay in that history until the owner recreates the repo.)
+# (Its read-only token can read claw-state. claw-backup encrypts new snapshots, but plaintext ones
+# from before encryption stay in that history until the owner recreates the repo, and the
+# encryption is claw-backup's doing, not enforced here: openclaw could push plaintext itself.)
 guard_write() {
   repo_visibility "$1"
   [ "$REPO_PUBLIC" = 1 ] || return 0
