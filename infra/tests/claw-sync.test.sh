@@ -307,8 +307,9 @@ git -C "$O" config --unset core.excludesFile; : > "$O/.git/info/exclude"
 for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
 run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
 
-# Plugin tripwire: a dir in ~/.openclaw/extensions not named in plugins.allow, or anything in the
-# workspace's .openclaw/extensions, fails the ping (named, never deleted); allowlisted ones are fine.
+# Plugin tripwire: a dir in ~/.openclaw/extensions other than $GLOBAL_PLUGINS (acpx, duckduckgo; not
+# plugins.allow), or anything in the workspace's .openclaw/extensions, fails the ping (named, never
+# deleted).
 c24=$(commit '{"plugins":{"allow":["acpx","duckduckgo"]}}'); rm -f "$S/last-full"
 mkdir -p "$O/extensions/acpx" "$O/extensions/duckduckgo"
 run; check "allowlisted plugin dirs in ~/.openclaw/extensions: healthy" eval '[ $rc = 0 ] && head_is $c24 && pinged "" "deployed"'

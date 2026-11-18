@@ -170,6 +170,9 @@ out = []
 if not allow:
     out.append("openclaw.json has no plugins.allow")
 out += ["%s isn't in plugins.allow" % name(p.get("id")) for p in plugins if allow and p.get("id") not in allow]
+# PluginOrigin in 2026.11.3 is "bundled" | "global" | "workspace" | "config"; anything else (a rename
+# in a later version) fails rather than letting the two checks below pass without looking
+out += ["%s has an unknown origin" % name(p.get("id")) for p in plugins if p.get("origin") not in ("bundled", "global", "workspace", "config")]
 out += ["%s loads from the workspace" % name(p.get("id")) for p in plugins if p.get("origin") == "workspace"]
 expected_global = set(sys.argv[4].split())
 out += ["%s loads from ~/.openclaw/extensions" % name(p.get("id")) for p in plugins if p.get("origin") == "global" and p.get("id") not in expected_global]
