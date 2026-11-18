@@ -31,6 +31,15 @@ export function clean(text, max) {
   return t;
 }
 const q = (text, max) => `“${clean(text, max)}”`;
+// sized(text, max): free text (a body, comment, task or message) for the card, after its length:
+// "(17 chars): “…”". When it doesn't fit, that says so before the text ("(5000 chars, only the first
+// 360 shown): “…”", so the card's own 512-char cap can't cut the warning off), and long() puts it in
+// the card's title too. The owner never mistakes the start for the whole thing: Approve covers it all.
+const tooLong = (text, max) => clean(text, Infinity).length > max;
+const sized = (text, max) => (tooLong(text, max)
+  ? `(${chars(text)}, only the first ${max} shown): ${q(text, max + 1)}`
+  : `(${chars(text)}): ${q(text, max)}`);
+const long = (text, max) => (tooLong(text, max) ? ` (long text: ${chars(text)}, start shown)` : "");
 
 // Events seen in recent calendar_events results, so a delete or update card can name the event,
 // not just its id. Filled by index.js; the broker still decides which id means which event.
@@ -84,22 +93,22 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
       description = p.change ? `Undo calendar change ${clean(p.change, 10)} (see calendar_changes)` : "Undo the last calendar change";
       break;
     case "github_issue_create":
-      title = "File GitHub issue";
+      title = `File GitHub issue${long(p.body ?? "", 200)}`;
       description = `File an issue on ${clean(p.repo, 100)}: ${q(p.title, 120)}`
         + (Array.isArray(p.labels) && p.labels.length ? ` · labels: ${clean(p.labels.join(", "), 120)}` : "")
-        + (p.body ? ` · body (${chars(p.body)}): ${q(p.body, 200)}` : " · no body");
+        + (p.body ? ` · body ${sized(p.body, 200)}` : " · no body");
       break;
     case "github_issue_comment":
-      title = "Comment on GitHub issue";
-      description = `Comment on ${clean(p.repo, 100)}#${clean(p.number, 10)} (${chars(p.body ?? "")}): ${q(p.body, 300)}`;
+      title = `Comment on GitHub issue${long(p.body ?? "", 300)}`;
+      description = `Comment on ${clean(p.repo, 100)}#${clean(p.number, 10)} ${sized(p.body ?? "", 300)}`;
       break;
     case "github_issue_label":
       title = "Change GitHub issue label";
       description = `${p.action === "remove" ? "Remove" : "Add"} label ${clean(p.label, 40)} ${p.action === "remove" ? "from" : "on"} ${clean(p.repo, 100)}#${clean(p.number, 10)}`;
       break;
     case "github_issue_close":
-      title = "Close GitHub issue";
-      description = `Close ${clean(p.repo, 100)}#${clean(p.number, 10)} with comment: ${q(p.comment, 300)}`;
+      title = `Close GitHub issue${long(p.comment ?? "", 300)}`;
+      description = `Close ${clean(p.repo, 100)}#${clean(p.number, 10)} with comment ${sized(p.comment ?? "", 300)}`;
       break;
     case "github_issue_reopen":
       title = "Reopen GitHub issue";
@@ -110,14 +119,14 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
       // ACP, which acp.defaultAgent may pick even without runtime "acp") unless it's explicitly an
       // OpenClaw subagent
       if (p.runtime === "subagent") return null;
-      title = "Hand a task to Claude Code";
+      title = `Hand a task to Claude Code${long(p.task ?? "", 360)}`;
       description = `Start ${clean(p.agentId || "the default ACP agent", 40)}${p.cwd ? ` in ${clean(p.cwd, 80)}` : ""}${p.resumeSessionId ? " (resuming a session)" : ""}`
-        + ` · task (${chars(p.task ?? "")}): ${q(p.task, 400)}`;
+        + ` · task ${sized(p.task ?? "", 360)}`;
       break;
     case "sessions_send":
-      title = "Send a message to another session";
+      title = `Send to another session${long(p.message ?? "", 360)}`;
       description = `Send to ${clean(p.sessionKey || p.label || (p.agentId ? `agent ${p.agentId}` : "a session"), 80)}`
-        + ` (${chars(p.message ?? "")}): ${q(p.message, 400)}`;
+        + ` ${sized(p.message ?? "", 360)}`;
       break;
     default:
       return null;
