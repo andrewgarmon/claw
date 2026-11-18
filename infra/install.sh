@@ -46,6 +46,11 @@ broker_prune brokers
 
 # --- deploy timer (claw-sync) + nightly state backup (claw-backup)
 command -v curl >/dev/null || apt-get install -y curl   # claw-sync healthchecks pings
+command -v age >/dev/null || apt-get install -y age     # claw-backup encrypts state with it
+# the backup's public key, from the config repo's backup.age.pub when there is one (a bad file
+# fails the install before anything else changes below)
+. lib/backup-key.sh
+backup_key_install ../backup.age.pub || exit 1
 install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
 install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
 install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
