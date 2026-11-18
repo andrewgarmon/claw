@@ -340,13 +340,31 @@
       "allowFrom": [
         "${TELEGRAM_ALLOW_FROM}"
       ],
-      "groupPolicy": "allowlist"
+      "groupPolicy": "allowlist",
+      "capabilities": {
+        "inlineButtons": "dm"
+      }
     }
   },
   "commands": {
     "ownerAllowFrom": [
       "telegram:${TELEGRAM_ALLOW_FROM}"
     ]
+  },
+  "approvals": {
+    "plugin": {
+      "enabled": true,
+      "mode": "targets",
+      "agentFilter": [
+        "main"
+      ],
+      "targets": [
+        {
+          "channel": "telegram",
+          "to": "${TELEGRAM_ALLOW_FROM}"
+        }
+      ]
+    }
   },
   "acp": {
     "enabled": true,
