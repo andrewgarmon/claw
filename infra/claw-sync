@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # claw-sync: make ~/.openclaw match origin/main. Runs as openclaw from a root-owned systemd timer.
 # - reverts local drift in tracked files and removes untracked files (anything git neither tracks nor
-#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. Ignored state
-#   (.env, USER.md, memory/, state-backup/, ...) is left alone: git clean runs without -x.
+#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. What counts as
+#   ignored comes only from the .gitignore committed at HEAD, so ignored state (.env, USER.md,
+#   memory/, state-backup/, ...) is left alone and a planted .gitignore can't hide anything.
 # - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
 # - invalid openclaw.json: not deployed (rolled back before any restart)
 # - gateway not healthy after a restart: rolls back to the last commit it was healthy on and restarts again
@@ -99,8 +100,17 @@ healthy() {  # wait up to $1 seconds for the gateway to be active and answering 
   done
 }
 cfg_hash() { sha256sum openclaw.json | cut -d' ' -f1; }
-# untracked: files git neither tracks nor ignores. clean_tree: no drift in tracked files, none of those.
-untracked() { git ls-files --others --exclude-standard; }
+# untracked [-z]: files git neither tracks nor ignores, judged only by the .gitignore committed at
+# HEAD. Nested .gitignore files, .git/info/exclude and core.excludesFile are not consulted: the
+# agent's user can write all of those, and could use them to hide a planted file.
+# clean_tree: no drift in tracked files, none of those.
+untracked() {
+  local ign rc=0
+  ign=$(mktemp)
+  git show HEAD:.gitignore > "$ign" 2>/dev/null || : > "$ign"
+  git -c core.excludesFile=/dev/null ls-files --others --exclude-from="$ign" "$@" || rc=$?
+  rm -f "$ign"; return "$rc"
+}
 clean_tree() { git diff --quiet HEAD && [ -z "$(untracked)" ]; }
 removed=""   # untracked files this run deleted; ok() turns the success ping into a fail ping
 validate() {
@@ -222,7 +232,13 @@ if [ -n "$left" ]; then
   removed=$(printf '%s\n' "$left" | sed -n '1,20p' | tr '\n' ' ')
   [ "$n" -le 20 ] || removed+="(and $((n - 20)) more)"
   echo "removing untracked files: $removed" >&2
-  git clean -fdq
+  # exactly those paths (not git clean, which would honour the excludes ignored above); then any
+  # directory left empty, up to the first one that isn't
+  while IFS= read -r -d '' f; do
+    rm -rf -- "$f"
+    d=$(dirname -- "${f%/}")
+    while [ "$d" != . ] && rmdir -- "$d" 2>/dev/null; do d=$(dirname -- "$d"); done
+  done < <(untracked -z)
 fi
 echo "synced ${before:0:7} -> ${want:0:7}"
 
