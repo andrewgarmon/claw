@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034  # rc and good are read inside eval'd check strings
 # Tests for infra/lib/backup-key.sh: the config repo's backup.age.pub is installed to
 # /etc/claw/backup.age.pub (under a scratch CLAW_ROOT, with a fake install that drops -o/-g) only
 # when it's a plain recipients file; anything else is refused and the installed key is kept.
