@@ -161,8 +161,7 @@ run issue-label claw-config 23 remove agent
 check "issue-label remove: creates no label" eval '[ $rc = 0 ] && called "[--remove-label=agent]" && ! called "[label]" && logged "ISSUE-LABEL claw-config#23 remove agent"'
 
 run new-repo fresh "A repo"
-check "new-repo: creates the repo, then seeds every allowlisted label" \
-  eval '[ $rc = 0 ] && called "[repo][create][andrewgarmon/fresh][--private]" && [ "$(grep -c "^\[label\]\[create\].*\[andrewgarmon/fresh\]" "$H/gh.log")" = 11 ] && called "[label][create][self-improvement][-R][andrewgarmon/fresh]" && says https://github.com/andrewgarmon/fresh && logged "REPO-NEW fresh"'
+check "new-repo is gone: refused with a pointer to the owner, no GitHub call" eval 'denied "new-repo was removed" && no_gh'
 
 stdin "Done in https://github.com/andrewgarmon/claw-config/pull/24"
 run issue-close claw-config 23
@@ -444,8 +443,6 @@ check "private repo: openclaw allowed, no checks run (unchanged)" eval '[ $rc = 
 stdin "$FAKE_BUNDLE"
 SUDO_USER=openclaw run pr claw-config claude/x "t"
 check "private repo: openclaw pr pushed without checks (unchanged)" eval '[ $rc = 0 ] && pushed && ! grep -qF "refs/base" "$H/git.log" && [ ! -s "$H/gitleaks.log" ]'
-run new-repo another
-check "new-repo: still private only" eval '[ $rc = 0 ] && called "[repo][create][andrewgarmon/another][--private]"'
 
 # ---------- state backups ----------
 STATE_BUNDLE=$(printf '# v2 git bundle\ndeadbeef refs/heads/agent/state/claw\n\n\001\002PACK')
