@@ -87,6 +87,15 @@ check "copytruncate rotation: the unread end of .1 and the new log are both read
   eval '[ $rc = 1 ] && pinged /fail "2 broker refusal" && pinged /fail "before rotation" && pinged /fail "after rotation"'
 run
 check "after rotation: clear" eval '[ $rc = 0 ]'
+# a rotation the log has already grown back past (an agent flooding it with allowed calls): the new
+# .1 gives it away
+deny openclaw "probe before a quiet rotation"
+cp "$L" "$L.new1"; mv -f "$L.new1" "$L.1"; : > "$L"
+for i in $(seq 200); do echo "$(now) caller=openclaw ISSUE-LIST claw padding padding padding $i" >> "$L"; done
+deny openclaw "probe after a quiet rotation"
+run
+check "rotation hidden by regrowth (new .1, log past the old offset): nothing missed" \
+  eval '[ $rc = 1 ] && pinged /fail "2 broker refusal" && pinged /fail "probe before a quiet rotation" && pinged /fail "probe after a quiet rotation"'
 mv "$L" "$T/real.log"; ln -s "$T/real.log" "$L"; deny openclaw "via symlink" "$T/real.log"
 run
 check "a log that's a symlink is ignored" eval '[ $rc = 0 ]'

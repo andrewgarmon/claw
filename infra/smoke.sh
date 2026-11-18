@@ -147,11 +147,13 @@ check_cal() {
 check_acp
 check_usage
 check_git_token
-# the refusal checks write DENY lines on purpose: record when, so claw-denywatch doesn't alert on them
+# the refusal checks write DENY lines on purpose: record the window before they run (so a
+# claw-denywatch run in the middle already sees it), ending when they must have finished (two calls
+# of at most WAIT seconds each, plus slack)
 smoke_start=$(date +%s)
-check_git_refusals
-mkdir -p "$(dirname "$SMOKE_WINDOWS")" && echo "$smoke_start $(date +%s)" >> "$SMOKE_WINDOWS" \
+mkdir -p "$(dirname "$SMOKE_WINDOWS")" && echo "$smoke_start $((smoke_start + 2 * WAIT + 30))" >> "$SMOKE_WINDOWS" \
   && tail -n 50 "$SMOKE_WINDOWS" > "$SMOKE_WINDOWS.new" && mv -f "$SMOKE_WINDOWS.new" "$SMOKE_WINDOWS"
+check_git_refusals
 check_timers
 check_gateway
 check_cal

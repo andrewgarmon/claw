@@ -41,25 +41,30 @@ expected() {
 
 # new_lines <name> <log>: print the lines added since the last run and move the position forward
 new_lines() {
-  local name=$1 log=$2 pos="$STATE/$1.pos" ino size oldino=0 off=0
+  local name=$1 log=$2 pos="$STATE/$1.pos" ino size ino1=0 oldino=0 off=0 oldino1=0
   if [ ! -f "$log" ] || [ -L "$log" ]; then
     # not there yet (a new broker): once it appears, read it from the top
-    [ -e "$pos" ] || echo "0 0" > "$pos"
+    [ -e "$pos" ] || echo "0 0 0" > "$pos"
     return 0
   fi
   ino=$(stat -c %i "$log") size=$(stat -c %s "$log")
+  # the rotated copy's inode: copytruncate keeps the log's own inode, but each rotation makes a new .1
+  if [ -f "$log.1" ] && [ ! -L "$log.1" ]; then ino1=$(stat -c %i "$log.1"); fi
   if [ ! -e "$pos" ]; then   # first run for a log that already exists: start from now, don't replay it
-    printf '%s %s\n' "$ino" "$size" > "$pos"; return 0
+    printf '%s %s %s\n' "$ino" "$size" "$ino1" > "$pos"; return 0
   fi
-  read -r oldino off < "$pos" 2>/dev/null || true
+  read -r oldino off oldino1 < "$pos" 2>/dev/null || true
   [[ $oldino =~ ^[0-9]+$ && $off =~ ^[0-9]+$ ]] || { oldino=0 off=0; }
-  if [ "$ino" != "$oldino" ] || [ "$size" -lt "$off" ]; then
-    # rotated (copytruncate shrinks it; a replaced file has a new inode): finish the rotated copy
-    if [ "$off" -gt 0 ] && [ -f "$log.1" ] && [ ! -L "$log.1" ]; then tail -c +$((off + 1)) "$log.1"; fi
+  [[ ${oldino1:-} =~ ^[0-9]+$ ]] || oldino1=0
+  # Rotated since the last run: the log was replaced, it shrank, or there's a new .1 (which catches
+  # a log that has already grown back past the old offset). Finish the rotated copy, then read the
+  # new log from the top.
+  if [ "$ino" != "$oldino" ] || [ "$size" -lt "$off" ] || [ "$ino1" != "$oldino1" ]; then
+    if [ "$off" -gt 0 ] && [ "$ino1" != 0 ]; then tail -c +$((off + 1)) "$log.1"; fi
     off=0
   fi
   tail -c +$((off + 1)) "$log" | head -c $((size - off))
-  printf '%s %s\n' "$ino" "$size" > "$pos.new" && mv -f "$pos.new" "$pos"
+  printf '%s %s %s\n' "$ino" "$size" "$ino1" > "$pos.new" && mv -f "$pos.new" "$pos"
 }
 
 count=0 sample=""

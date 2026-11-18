@@ -160,8 +160,8 @@ check "logrotate: weekly, keep 8, copytruncate, rotated as the broker user" \
   eval 'f=$R/etc/logrotate.d/claw-brokers; grep -q "^/home/gitbot/agent-git.log {" "$f" && grep -q "su gitbot gitbot" "$f" && grep -q "rotate 8" "$f" && grep -q copytruncate "$f" && grep -q weekly "$f"'
 if command -v logrotate >/dev/null; then
   # parse check only (-d: debug, changes nothing); the paths don't exist here (missingok), and the
-  # broker users don't either, so the copy checked says su root root
-  sed 's/^  su [a-z0-9-]* [a-z0-9-]*$/  su root root/' "$R/etc/logrotate.d/claw-brokers" > "$T/lr.conf"
+  # broker users don't either, so the copy checked runs as whoever runs the test (root or not, as in CI)
+  sed "s/^  su [a-z0-9-]* [a-z0-9-]*\$/  su $(/usr/bin/id -un) $(/usr/bin/id -gn)/" "$R/etc/logrotate.d/claw-brokers" > "$T/lr.conf"
   logrotate -d -s "$T/lr.state" "$T/lr.conf" > "$T/out" 2>&1; rc=$?
   check "logrotate -d accepts the generated config" eval '[ $rc = 0 ] && ! grep -qi "error" "$T/out"'
 else
