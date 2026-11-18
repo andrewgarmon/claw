@@ -8,7 +8,8 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 BIN=$T/bin CU=$T/claude-usage MJS=$T/claude-usage.mjs LOG=$T/sdk.log
 mkdir -p "$BIN" "$T/home"
 NODE_DIR=$(dirname "$(command -v node)")
-export CLAUDE_USAGE_WAIT=3 FAKE_LOG=$LOG
+# Long enough for a cold node start on a busy CI runner; only the hang test shortens it.
+export CLAUDE_USAGE_WAIT=30 FAKE_LOG=$LOG
 
 sed "s|^const SDK = .*|const SDK = \"$T/fake-sdk.mjs\";|" "$INFRA/claude-usage.mjs" > "$MJS"
 sed -e "s|^export HOME=/home/coder$|export HOME=$T/home|" \
@@ -120,7 +121,7 @@ run; check "SDK without the usage request (renamed after a bump): exit 1, says s
 export FAKE_MODE=nowindows
 run; check "response without windows: exit 1" eval '[ $rc = 1 ] && grep -q "no usage windows" "$T/err"'
 export FAKE_MODE=hang
-run; check "no answer: times out, exit 124" eval '[ $rc = 124 ] && grep -q "no answer within 3s" "$T/err" && [ ! -e "$C" ]'
+CLAUDE_USAGE_WAIT=3 run; check "no answer: times out, exit 124" eval '[ $rc = 124 ] && grep -q "no answer within 3s" "$T/err" && [ ! -e "$C" ]'
 export FAKE_MODE=good
 
 mv "$T/fake-sdk.mjs" "$T/fake-sdk.off"

@@ -33,6 +33,7 @@
           {
             "id": "gemini-3.8-flash",
             "name": "Gemini 3.8 Flash",
+            "contextTokens": 200000,
             "cost": {
               "input": 1.5,
               "output": 7.5,
@@ -43,6 +44,7 @@
           {
             "id": "gemini-4-argon",
             "name": "Gemini 4 Argon",
+            "contextTokens": 200000,
             "cost": {
               "input": 4,
               "output": 20,
@@ -53,6 +55,7 @@
           {
             "id": "gemini-4-hydrogen",
             "name": "Gemini 4 Hydrogen",
+            "contextTokens": 200000,
             "cost": {
               "input": 1.5,
               "output": 7.5,
@@ -202,11 +205,18 @@
       }
     }
   },
+  "session": {
+    "reset": {
+      "mode": "idle",
+      "idleMinutes": 5760
+    }
+  },
   "hooks": {
     "internal": {
       "entries": {
         "session-memory": {
-          "enabled": true
+          "enabled": true,
+          "messages": 50
         },
         "bootstrap-extra-files": {
           "enabled": true,

@@ -114,6 +114,20 @@ run
 check "no terminal and no -y: refuses, installs nothing" \
   eval '[ $rc = 1 ] && says "re-run with -y" && [ ! -s "$T/installed" ] && [ "$(last)" = "$sha2" ] && work_empty'
 
+# interactive (a pty from script(1); less replaced by cat): the full infra/ diff comes before the question
+if command -v script >/dev/null; then
+  printf '#!/bin/bash\ncat\n' > "$BIN/less"; chmod +x "$BIN/less"
+  : > "$T/installed"
+  { sleep 2; echo n; } | script -qec "bash $CI" /dev/null > "$T/out" 2>&1; rc=$?
+  diff_at=$(grep -n -m1 "diff --git a/infra/install.sh" "$T/out" | cut -d: -f1)
+  ask_at=$(grep -n -m1 "Install [0-9a-f]*? \[y\]es" "$T/out" | cut -d: -f1)
+  check "interactive: the full infra/ diff is shown before the question; answering n installs nothing" \
+    eval '[ -n "$diff_at" ] && [ -n "$ask_at" ] && [ "$diff_at" -lt "$ask_at" ] && says "echo \"v3 " && says "not installed" && [ ! -s "$T/installed" ] && [ "$(last)" = "$sha2" ]'
+  rm "$BIN/less"
+else
+  echo "skip interactive claw-install test (no script(1))"
+fi
+
 touch "$T/install_fails"
 run -y
 check "install.sh failure: nothing recorded, bootstrap not replaced" \
