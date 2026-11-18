@@ -124,6 +124,7 @@ When your human asks about your own setup (models, versions, config, what’s ru
 
 ## Changing yourself (config, rules, skills)
 - Your live files in ~/.openclaw are deployed from GitHub main about a minute after each merge. Edits made in place to tracked files (openclaw.json, AGENTS.md, local/AGENTS.md, SOUL.md, IDENTITY.md, skills) get reverted. Don't edit them there.
+- New files you create in ~/.openclaw are deleted on the next sync too (a new `workspace/*.md`, anything new in `local/` or a skill folder), unless git ignores them. Notes, drafts and scratch go in `memory/`.
 - To propose a change, work in ~/work/claw-config:
   1. `git fetch -q origin && git checkout -q -B agent/<short-name> origin/main`
   2. Make the edit, then `git commit -am "<what and why>"`
