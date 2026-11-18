@@ -15,9 +15,12 @@ export LC_ALL=C
 # (newlines, escapes) are stripped and the entry is capped at 300 bytes: no forged lines, nothing
 # that drives a terminal tailing the log.
 broker_log() {
-  local entry
-  entry=$(printf '%s' "$*" | LC_ALL=C tr -d '\000-\037\177' | head -c 300)
-  printf '%s caller=%s %s\n' "$(date -Is)" "${SUDO_USER:-?}" "$entry" >> "$LOG"
+  # no pipe: with an argument bigger than a pipe buffer, `tr | head -c` would die of SIGPIPE under
+  # pipefail, and set -e would end the broker before the entry was written. [[:cntrl:]] in the C
+  # locale (exported above) is exactly \000-\037 and \177.
+  local entry=$*
+  entry=${entry//[[:cntrl:]]/}
+  printf '%s caller=%s %s\n' "$(date -Is)" "${SUDO_USER:-?}" "${entry:0:300}" >> "$LOG"
 }
 log() { broker_log "$@"; }
 die() { echo "$BROKER: $*" >&2; broker_log "DENY $*"; exit 1; }

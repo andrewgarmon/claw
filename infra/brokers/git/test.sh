@@ -497,6 +497,9 @@ check "a refused argument can't forge a log line or carry escapes: one line, no 
   eval '[ $rc = 1 ] && [ "$(wc -l < "$H/agent-git.log")" = 1 ] && ! LC_ALL=C grep -q "[[:cntrl:]]" <(tr -d "\n" < "$H/agent-git.log")'
 run issue-list "$(printf 'y%.0s' {1..1000})"
 check "log entries are capped" eval '[ $rc = 1 ] && [ "$(wc -c < "$H/agent-git.log")" -lt 400 ]'
+run issue-list "$(head -c 120000 /dev/zero | tr '\0' 'z')"
+check "a refused 120 KB argument is still logged (no SIGPIPE ending the broker first)" \
+  eval '[ $rc = 1 ] && [ "$(wc -l < "$H/agent-git.log")" = 1 ] && grep -q "DENY bad repo name" "$H/agent-git.log" && [ "$(wc -c < "$H/agent-git.log")" -lt 400 ]'
 for loc in en_US.UTF-8 C.UTF-8; do
   LC_ALL=$loc run issue-list "cläw"
   check "repo pattern is ASCII-only under the caller's $loc locale" eval 'denied "bad repo name"'
