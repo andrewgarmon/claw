@@ -7,7 +7,18 @@
 #   LOG          its log file. Log the caller, the verb and validated arguments: never secrets,
 #                never bodies.
 
-broker_log() { printf '%s caller=%s %s\n' "$(date -Is)" "${SUDO_USER:-?}" "$*" >> "$LOG"; }
+# Patterns and lengths mean the same whatever locale the caller's sudo passes through (LC_* survive
+# env_reset): [a-z] and [0-9] are ASCII only, and ${#x} counts bytes.
+export LC_ALL=C
+
+# broker_log: one line per entry. A refused argument lands here unvalidated, so control characters
+# (newlines, escapes) are stripped and the entry is capped at 300 bytes: no forged lines, nothing
+# that drives a terminal tailing the log.
+broker_log() {
+  local entry
+  entry=$(printf '%s' "$*" | LC_ALL=C tr -d '\000-\037\177' | head -c 300)
+  printf '%s caller=%s %s\n' "$(date -Is)" "${SUDO_USER:-?}" "$entry" >> "$LOG"
+}
 log() { broker_log "$@"; }
 die() { echo "$BROKER: $*" >&2; broker_log "DENY $*"; exit 1; }
 

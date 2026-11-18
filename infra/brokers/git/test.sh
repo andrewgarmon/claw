@@ -491,6 +491,38 @@ check "two prs on one repo at once: serialised (pushes never overlap), both succ
   eval '[ "$r" = 00 ] && [ "$(cut -d" " -f1 "$H/order" | paste -sd" " -)" = "start end start end" ] && [ "$(sed -n 1p "$H/order" | cut -d" " -f2)" = "$(sed -n 2p "$H/order" | cut -d" " -f2)" ]'
 rm "$H/push_sleep"
 
+# ---------- hardening: the log, locale, case, titles, secrets in state backups ----------
+run issue-list "$(printf 'x\nTIME caller=coder PUSH claw claude/ok\033[31m')"
+check "a refused argument can't forge a log line or carry escapes: one line, no control characters" \
+  eval '[ $rc = 1 ] && [ "$(wc -l < "$H/agent-git.log")" = 1 ] && ! LC_ALL=C grep -q "[[:cntrl:]]" <(tr -d "\n" < "$H/agent-git.log")'
+run issue-list "$(printf 'y%.0s' {1..1000})"
+check "log entries are capped" eval '[ $rc = 1 ] && [ "$(wc -c < "$H/agent-git.log")" -lt 400 ]'
+for loc in en_US.UTF-8 C.UTF-8; do
+  LC_ALL=$loc run issue-list "cläw"
+  check "repo pattern is ASCII-only under the caller's $loc locale" eval 'denied "bad repo name"'
+  LC_ALL=$loc run issue-view claw-config "$(printf '\xd9\xa2\xd9\xa3')"
+  check "issue number is ASCII digits only under $loc" eval 'denied "bad issue number"'
+done
+stdin "$FAKE_BUNDLE"
+SUDO_USER=openclaw run pr Claw-State claude/x "t"
+check "repo names are compared case-insensitively: Claw-State is the state repo" eval 'denied "takes nothing else" && [ ! -s "$H/git.log" ]'
+run issue-list CLAW-CONFIG
+check "repo names are lowercased on the way in" eval '[ $rc = 0 ] && called "[issue][list][-R][andrewgarmon/claw-config]"'
+stdin "$FAKE_BUNDLE"
+SUDO_USER=openclaw run pr claw-config claude/x "$(printf 'a\nb')"
+check "pr title with a newline refused (same rule as issue titles)" eval 'denied "title empty, too long" && [ ! -s "$H/git.log" ]'
+printf 'diff --git a/memory/x.md b/memory/x.md\n@@ -0,0 +1 @@\n+pasted %s\n' "$TOKEN" > "$H/diffs"
+stdin "$STATE_BUNDLE"
+SUDO_USER=openclaw run pr claw-state agent/state/claw "State backup: claw"
+check "state backup with a token: refused before pushing, rule and part logged, token never shown" \
+  eval 'denied "state backup can.t carry a secret" && ! grep -q "\[push\]" "$H/git.log" && logged "SECRET-FOUND claw-state" && ! grep -qF "$TOKEN" "$T/out" "$H/agent-git.log" && grep -qF "added-lines" "$T/out"'
+printf 'diff --git a/memory/x.md b/memory/x.md\n@@ -0,0 +1 @@\n+a normal note\n' > "$H/diffs"
+stdin "$STATE_BUNDLE"
+SUDO_USER=openclaw run pr claw-state agent/state/claw "State backup: claw"
+check "clean state backup: scanned against the branch on GitHub, then pushed" \
+  eval '[ $rc = 0 ] && [ -s "$H/gitleaks.log" ] && grep -qF "[+refs/heads/agent/state/claw:refs/base/agent/state/claw]" "$H/git.log" && plain_pushed agent/state/claw'
+: > "$H/diffs"
+
 touch "$H/not_gitbot"
 run issue claw-config "t"
 check "not running as gitbot: refused" eval '[ $rc = 1 ] && says "must run as gitbot" && no_gh'
