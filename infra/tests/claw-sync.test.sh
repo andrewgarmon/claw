@@ -281,6 +281,7 @@ run; check "untracked files: removed, named in a fail ping, no restart" \
 check "untracked files are gone" eval '! ls "$O/workspace/BOOTSTRAP.md" "$O/workspace/TOOLS.md" "$O/workspace/skills/new" "$O/skills/extra" 2>/dev/null'
 check "ignored state is kept (.env, USER.md, MEMORY.md, memory/, state-backup/, workspace/.openclaw/, agents/)" \
   eval 'for f in .env workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backup/x workspace/.openclaw/extensions/x/index.ts agents/s.json; do [ -e "$O/$f" ] || exit 1; done'
+rm -rf "$O/workspace/.openclaw"   # kept by git clean, but the plugin tripwire below would report it
 run; check "after the cleanup: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 echo planted > "$O/workspace/HEARTBEAT.md"
 run; check "untracked file within 5 min of a full run: not skipped as idle" \
@@ -294,5 +295,22 @@ run; check "a local file the new commit tracks: overwritten by the sync, not rep
   eval '[ $rc = 0 ] && [ "$(cat "$O/workspace/LATER.md")" = new ] && ! pinged /fail ""'
 for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
 run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
+
+# Plugin tripwire: a dir in ~/.openclaw/extensions not named in plugins.allow, or anything in the
+# workspace's .openclaw/extensions, fails the ping (named, never deleted); allowlisted ones are fine.
+c24=$(commit '{"plugins":{"allow":["acpx","duckduckgo"]}}'); rm -f "$S/last-full"
+mkdir -p "$O/extensions/acpx" "$O/extensions/duckduckgo"
+run; check "allowlisted plugin dirs in ~/.openclaw/extensions: healthy" eval '[ $rc = 0 ] && head_is $c24 && pinged "" "deployed"'
+mkdir -p "$O/extensions/evil"; rm -f "$S/last-full"
+run; check "plugin dir not in plugins.allow: fail ping naming it, left in place" \
+  eval '[ $rc = 1 ] && pinged /fail "unexpected OpenClaw plugin dirs in ~/.openclaw: extensions/evil" && [ -d "$O/extensions/evil" ]'
+check "tripwire keeps last-full (rechecked every ~5 min, not every minute)" eval '[ -s "$S/last-full" ]'
+rm -rf "$O/extensions/evil"; mkdir -p "$O/workspace/.openclaw/extensions/duckduckgo" "$O/extensions/.hidden"; rm -f "$S/last-full"
+run; check "anything in the workspace extensions dir (even an allowlisted id) and hidden dirs: reported" \
+  eval '[ $rc = 1 ] && pinged /fail "extensions/.hidden" && pinged /fail "workspace/.openclaw/extensions/duckduckgo"'
+rm -rf "$O/workspace/.openclaw" "$O/extensions/.hidden"; ln -s /tmp "$O/extensions/linked"; rm -f "$S/last-full"
+run; check "a symlink in an extensions dir: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/linked"'
+rm -f "$O/extensions/linked"; rm -f "$S/last-full"
+run; check "tripwire clear: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

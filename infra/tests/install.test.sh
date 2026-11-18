@@ -112,7 +112,7 @@ check "harness check: a root write through the symlink is detected" eval '[ "$(s
 
 # ---------- static: nothing run as root writes under /home/ itself ----------
 cd "$INFRA/.." || exit 1
-ROOT_RUN=(infra/install.sh infra/lib/broker-install.sh infra/lib/service-home.sh infra/claw-install)
+ROOT_RUN=(infra/install.sh infra/lib/broker-install.sh infra/lib/service-home.sh infra/lib/openclaw-plugins.sh infra/claw-install)
 # root only installs files and dirs owned by root (/srv/work is coder's, but outside any home)
 bad=$(grep -nE '(^|[[:space:];&|(])install [^#]*-o +' "${ROOT_RUN[@]}" | grep -vE -- '-o +root ' | grep -v ' /srv/work$')
 check "no install -o <service user> in root-run scripts" eval '[ -z "$bad" ] || { echo "$bad" > "$T/out"; false; }'

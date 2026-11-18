@@ -65,6 +65,84 @@
     }
   },
   "plugins": {
+    "allow": [
+      "a2a",
+      "acpx",
+      "active-memory",
+      "admin-http-rpc",
+      "advisor",
+      "agentsapi",
+      "alibaba",
+      "anthropic",
+      "apple-fm",
+      "azure-speech",
+      "beam",
+      "bonjour",
+      "browser",
+      "canvas",
+      "clawrouter",
+      "cloudflare",
+      "code-mode-quickjs",
+      "copilot-proxy",
+      "crabbox",
+      "cua-computer",
+      "deepgram",
+      "device-pair",
+      "document-extract",
+      "duckduckgo",
+      "elevenlabs",
+      "fal",
+      "file-transfer",
+      "geolocation",
+      "github",
+      "github-copilot",
+      "google",
+      "huggingface",
+      "imap",
+      "kie",
+      "linux-node",
+      "litellm",
+      "llm-task",
+      "lmstudio",
+      "logbook",
+      "mcp-events",
+      "mcp-relay",
+      "memory-core",
+      "memory-wiki",
+      "microsoft",
+      "microsoft-foundry",
+      "migrate-claude",
+      "migrate-hermes",
+      "minimax",
+      "nvidia",
+      "oc-path",
+      "ollama",
+      "onepassword",
+      "openai",
+      "opencode-go",
+      "openrouter",
+      "policy",
+      "reef",
+      "runway",
+      "senseaudio",
+      "session-share",
+      "sglang",
+      "talk-voice",
+      "telegram",
+      "together",
+      "tts-local-cli",
+      "vault",
+      "vllm",
+      "web-readability",
+      "workboard",
+      "x",
+      "xai"
+    ],
+    "load": {
+      "paths": [
+        "/usr/local/lib/claw/openclaw-plugins/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"
+      ]
+    },
     "entries": {
       "anthropic": {
         "config": {
@@ -84,10 +162,16 @@
         "enabled": true
       },
       "duckduckgo": {
-        "enabled": true
+        "enabled": true,
+        "hooks": {
+          "allowPromptInjection": false
+        }
       },
       "acpx": {
         "enabled": true,
+        "hooks": {
+          "allowPromptInjection": false
+        },
         "config": {
           "permissionMode": "approve-all",
           "nonInteractivePermissions": "fail",

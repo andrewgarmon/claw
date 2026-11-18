@@ -26,6 +26,7 @@
 - `agent-git-refusals`: a state-backup push as coder and a `claude/*` push to claw-state as openclaw must both be refused. Both are refused before any network access; each leaves a `DENY` line (branch names `*/claw-smoke`) in agent-git.log.
 - `timers`: `claw-sync.timer` and `claw-backup.timer` are enabled, active and have a next run.
 - `gateway`: `~/.openclaw` is at `origin/main` (as of claw-sync's last fetch) and `openclaw gateway health` answers.
+- `plugins`: OpenClaw's plugin registry (`openclaw plugins list --json --enabled`, as openclaw) has only ids from `plugins.allow` enabled, none from the workspace extensions dir, and each root-owned plugin enabled from its dir under `/usr/local/lib/claw/openclaw-plugins/`. Prints plugin ids only.
 - `agent-cal`: one read-only `calendars` call, skipped if the broker or its secret isn't there.
 
 It only reads, or makes calls that are refused before the network: it never pushes, messages Telegram, creates events or calls a model, and it never prints command output, only its own reasons.
@@ -114,22 +115,9 @@ Quick health check (timer, gateway, recent logs, memory): `claw-status` (as the 
   - `compile-cache.conf`: Sets `NODE_COMPILE_CACHE` for faster restarts.
 - After a change: `sudo -u openclaw XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) systemctl --user daemon-reload`, then restart the gateway. Check with `... systemctl --user cat openclaw-gateway` (OpenClaw's `ExecStart` plus the drop-ins from `/etc/systemd/user/`) and `sudo cat /proc/$(pgrep -u openclaw -f 'openclaw.*gateway' | head -1)/environ | tr '\0' '\n' | grep NODE_OPTIONS`.
 
-## Plugin Pins
-OpenClaw keeps plugin install records (and their pins) in its SQLite state database, not in `openclaw.json` (`plugins.installs` was retired). So a pin can't be committed here; set it on the droplet as the admin user with sudo:
-
-| Plugin | Package | Pinned version |
-| :--- | :--- | :--- |
-| duckduckgo | `@openclaw/duckduckgo-plugin` | `2026.11.3` |
-
-This is a manual plugin change, so follow `infra/README.md`: stop `claw-sync` first, otherwise it reverts any `openclaw.json` drift the update leaves behind. `openclaw` is only on openclaw's PATH (`~/.npm-global`), so run it through `sudo -iu openclaw`. The new plugin code loads only after a gateway restart.
-
-```bash
-sudo systemctl stop claw-sync.timer
-sudo -iu openclaw openclaw plugins update @openclaw/duckduckgo-plugin@2026.11.3
-sudo -iu openclaw openclaw security audit   # plugins.installs_unpinned_npm_specs should be gone
-sudo -u openclaw git -C /home/openclaw/.openclaw status --short   # if openclaw.json changed, PR and merge it before restarting the timer
-sudo -u openclaw XDG_RUNTIME_DIR="/run/user/$(id -u openclaw)" systemctl --user restart openclaw-gateway
-sudo systemctl start claw-sync.timer
-```
-
-`openclaw update` releases pins on official `@openclaw/*` plugins once core is at or past the pinned version. After every core update, check `openclaw security audit` again and re-pin to the version that matches the new core.
+## Plugins
+OpenClaw runs native plugins in the gateway process with the gateway's access, so what loads is fixed in this repo:
+- **`plugins.allow`** in `openclaw.json` lists every plugin id that may load: the plugins bundled with the pinned OpenClaw version plus the non-bundled ones in use (`acpx`, `duckduckgo`). Any other id is ignored, wherever it's found. A plugin dropped into `~/.openclaw/extensions` or `<workspace>/.openclaw/extensions` with a bundled id doesn't replace the bundled copy (bundled ranks above those dirs in OpenClaw's discovery precedence). When an OpenClaw upgrade bundles a new plugin you want, add its id here. Enabling a plugin with the CLI adds it to the list in place, which claw-sync reverts, so add it by PR.
+- **Root-owned plugins** live in `infra/openclaw-plugins/<id>/`: the plugin's source, or a `package.json` + `package-lock.json` that pins an npm package at an exact version. `sudo claw-install` installs each one root-owned to `/usr/local/lib/claw/openclaw-plugins/<id>` (`npm ci --ignore-scripts`, built in `<id>.new` and swapped in, reinstalled only when the source changes), and `openclaw.json` loads it from there with `plugins.load.paths`. A configured load path ranks highest, so a copy with the same id anywhere else is dropped. openclaw can run the code but can't change it. Each one has `plugins.entries.<id>.hooks.allowPromptInjection: false` unless it needs prompt hooks. `infra/tests/openclaw-plugins.test.sh` checks that `openclaw.json` and this folder agree. Until `claw-install` has run, a missing load path is only a warning, and OpenClaw uses the plugin's previous install.
+- **DuckDuckGo** is pinned this way (`infra/openclaw-plugins/duckduckgo/`). To upgrade it, bump the version in its `package.json`, run `npm install --package-lock-only --ignore-scripts --legacy-peer-deps` there, open a PR, merge it, then run `sudo claw-install`. The old copy under `~/.openclaw/extensions/duckduckgo` is shadowed by the root-owned one; leave it (uninstalling through the CLI also edits `openclaw.json`).
+- **Tripwire:** a claw-sync full run fails its ping, naming the dirs, while `~/.openclaw/extensions` holds a dir not named in `plugins.allow`, or `<workspace>/.openclaw/extensions` holds anything at all. It reports and never deletes. claw-sync runs as openclaw, so this catches mistakes; the allowlist and root-owned paths are the control. `claw-smoke` also checks the registry (see Smoke test).

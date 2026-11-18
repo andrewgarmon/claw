@@ -38,6 +38,8 @@ unset BROKER_ROOT CLAW_ROOT
 . lib/service-home.sh
 # shellcheck source=lib/broker-install.sh
 . lib/broker-install.sh
+# shellcheck source=lib/openclaw-plugins.sh
+. lib/openclaw-plugins.sh
 brokers_check brokers/*/ || { echo "install.sh: $B_ERR" >&2; exit 1; }
 install -d -m 755 -o root -g root /usr/local/lib/claw /usr/local/lib/claw/brokers
 install -m 644 -o root -g root lib/broker.sh /usr/local/lib/claw/broker.sh
@@ -76,6 +78,9 @@ if ! cmp -s acp/package-lock.json "$ACP/package-lock.json" || [ ! -x "$ACP/node_
     fi
   fi
 fi
+# --- OpenClaw plugins loaded from root-owned paths (plugins.load.paths): infra/openclaw-plugins/<id>/
+oc_plugins_install openclaw-plugins
+
 visudo -cf coder.sudoers
 install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
 coder_home_install   # ~coder/.config and ~/.claude (as coder), /etc/claude-code/CLAUDE.md

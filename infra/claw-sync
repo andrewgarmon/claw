@@ -18,6 +18,9 @@
 #   success when synced + healthy, /fail otherwise. No pings at all = claw-sync or the host is down.
 # - a full run also fails the ping while claw-backup hasn't succeeded in $BACKUP_MAX_AGE (26h), so a
 #   backup job that silently stops running is noticed, not just one that fails
+# - ... and while an OpenClaw extensions dir holds a plugin openclaw.json's plugins.allow doesn't name
+#   (anything at all in the workspace one). Reported, never deleted. claw-sync runs as the agent's
+#   user, so this is a tripwire for mistakes; plugins.allow and root-owned load paths are the control.
 # - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
 #   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
 #   was under $FULL_EVERY seconds ago. So health checks and pings still happen about every 5 minutes.
@@ -55,10 +58,30 @@ backup_stale() {
   [ $(( $(date +%s) - t )) -ge "$BACKUP_MAX_AGE" ] || return 1
   echo "claw-backup hasn't succeeded in $(( ($(date +%s) - t) / 3600 ))h"
 }
-ok() {  # success ping, but fail while origin/main is marked bad, untracked files were removed or backups are stale
-  local stale
+# planted_plugins: prints the plugin dirs nobody asked for: entries of ~/.openclaw/extensions not named in
+# plugins.allow, and every entry of the workspace's .openclaw/extensions (nothing belongs there).
+planted_plugins() {
+  local allow d out=""
+  allow=$(jq -r '.plugins.allow[]?' openclaw.json 2>/dev/null) || { echo "(can't read plugins.allow from openclaw.json)"; return 0; }
+  allow=" $(printf '%s' "$allow" | tr '\n' ' ') "
+  for d in extensions/* extensions/.[!.]* workspace/.openclaw/extensions/* workspace/.openclaw/extensions/.[!.]*; do
+    [ -e "$d" ] || [ -L "$d" ] || continue
+    case $d in extensions/*) [[ $allow == *" ${d#extensions/} "* ]] && continue ;; esac
+    out+="$d "
+  done
+  [ -n "$out" ] || return 1
+  echo "${out% }"
+}
+ok() {  # success ping, but fail while origin/main is marked bad, untracked files were removed, an unexpected
+        # plugin dir exists or backups are stale
+  local stale planted
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
   [ -z "$removed" ] || die "untracked files removed: $removed ($*)"
+  if planted=$(planted_plugins); then
+    # like a stale backup: keep last-full, so it's rechecked every ~5 min rather than every minute
+    echo "unexpected OpenClaw plugin dirs: $planted" >&2; hc fail "unexpected OpenClaw plugin dirs in ~/.openclaw: $planted ($*)"
+    date +%s > "$STATE/last-full"; exit 1
+  fi
   if stale=$(backup_stale); then
     # not die: this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute
     echo "$stale" >&2; hc fail "$stale: sudo journalctl -u claw-backup -n 20 ($*)"

@@ -17,6 +17,7 @@ AGENT_GIT=/usr/local/bin/agent-git
 AGENT_CAL=/usr/local/bin/agent-cal
 CAL_SECRET=/home/calbot/.config/caldav.env
 OC_HOME=/home/openclaw
+OC_PLUGINS=/usr/local/lib/claw/openclaw-plugins   # root-owned plugins (install.sh, lib/openclaw-plugins.sh)
 CONFIG_REPO=claw-config   # the repo claw-install deploys (see its REPO)
 STATE_REPO=claw-state     # agent-git's STATE_REPO
 WAIT=${CLAW_SMOKE_WAIT:-20}   # seconds per command; override only for tests
@@ -143,12 +144,51 @@ check_cal() {
   FAIL agent-cal "listing calendars failed ($(exited $rc)): check the app-specific password; see /home/calbot/agent-cal.log"
 }
 
+# 7. Plugins: everything OpenClaw has enabled is in plugins.allow, none comes from the workspace
+#    extensions dir, and each root-owned plugin is enabled from its root-owned dir. Reads OpenClaw's
+#    plugin registry (`plugins list --json`), not the running gateway. Prints plugin ids only.
+check_plugins() {
+  local uid rc bad
+  uid=$(id -u openclaw 2>/dev/null) || { FAIL plugins "no openclaw user"; return; }
+  timeout "$WAIT" sudo -n -u openclaw env HOME="$OC_HOME" PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" \
+    XDG_RUNTIME_DIR="/run/user/$uid" openclaw plugins list --json --enabled > "$OUT/plugins" 2>/dev/null; rc=$?
+  [ "$rc" = 0 ] || { FAIL plugins "openclaw plugins list failed ($(exited $rc)); try: sudo -iu openclaw openclaw plugins list"; return; }
+  # shellcheck disable=SC2024  # on purpose: openclaw reads its file, root writes its own temp copy
+  sudo -n -u openclaw cat "$OC_HOME/.openclaw/openclaw.json" > "$OUT/cfg" 2>/dev/null || { FAIL plugins "can't read openclaw.json"; return; }
+  bad=$(python3 -I - "$OUT/plugins" "$OUT/cfg" "$OC_PLUGINS" <<'PY'
+import json, os, re, sys
+def name(s):  # never echo odd text from the registry
+    return s if isinstance(s, str) and re.fullmatch(r"[a-z0-9@._/-]{1,64}", s) else "<odd id>"
+try:
+    plugins = [p for p in json.load(open(sys.argv[1]))["plugins"] if p.get("enabled")]
+    allow = set(json.load(open(sys.argv[2])).get("plugins", {}).get("allow") or [])
+except Exception:
+    print("unreadable plugins list or openclaw.json"); sys.exit()
+out = []
+if not allow:
+    out.append("openclaw.json has no plugins.allow")
+out += ["%s isn't in plugins.allow" % name(p.get("id")) for p in plugins if allow and p.get("id") not in allow]
+out += ["%s loads from the workspace" % name(p.get("id")) for p in plugins if p.get("origin") == "workspace"]
+root = sys.argv[3]
+ids = sorted(d for d in os.listdir(root) if not d.endswith(".new")) if os.path.isdir(root) else []
+for d in ids:
+    mine = [p for p in plugins if p.get("id") == d]
+    if not any(str(p.get("rootDir") or "").startswith(os.path.join(root, d) + "/") or p.get("rootDir") == os.path.join(root, d) for p in mine):
+        out.append("%s isn't enabled from %s" % (name(d), os.path.join(root, name(d))))
+print("; ".join(out))
+PY
+)
+  [ -z "$bad" ] || { FAIL plugins "$bad"; return; }
+  PASS plugins
+}
+
 check_acp
 check_usage
 check_git_token
 check_git_refusals
 check_timers
 check_gateway
+check_plugins
 check_cal
 
 if [ "$fail" = 0 ]; then
