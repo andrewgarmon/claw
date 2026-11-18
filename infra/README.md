@@ -27,6 +27,7 @@
 - `timers`: `claw-sync.timer` and `claw-backup.timer` are enabled, active and have a next run.
 - `gateway`: `~/.openclaw` is at `origin/main` (as of claw-sync's last fetch) and `openclaw gateway health` answers.
 - `plugins`: OpenClaw's plugin registry (`openclaw plugins list --json --enabled`, as openclaw) has only ids from `plugins.allow` enabled, none from the workspace extensions dir, and each root-owned plugin enabled from its dir under `/usr/local/lib/claw/openclaw-plugins/`. Prints plugin ids only.
+- `tools`: the deployed `openclaw.json` denies `group:runtime`, `gateway`, `cron` and `skill_workshop`, has `tools.fs.workspaceOnly: true`, and allows every tool the installed claw-tools plugin declares. Skipped until claw-tools is installed.
 - `agent-cal`: one read-only `calendars` call, skipped if the broker or its secret isn't there.
 
 It only reads, or makes calls that are refused before the network: it never pushes, messages Telegram, creates events or calls a model, and it never prints command output, only its own reasons.
@@ -114,6 +115,14 @@ Quick health check (timer, gateway, recent logs, memory): `claw-status` (as the 
   - `heap.conf`: Sets `NODE_OPTIONS=--max-old-space-size=2048` (a 2 GB heap limit). OpenClaw's own `ExecStart` is left alone, so `openclaw update` needs no drop-in edit. Node processes the gateway starts directly (plugins, `npm`/`npx`, execs) inherit the same limit: a cap, not a reservation. Those started through sudo (`coder-acp`, the brokers) don't, since sudo resets the environment. An `EnvironmentFile=` in OpenClaw's unit setting `NODE_OPTIONS` would override this; the `/proc/<pid>/environ` check below shows which one won.
   - `compile-cache.conf`: Sets `NODE_COMPILE_CACHE` for faster restarts.
 - After a change: `sudo -u openclaw XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) systemctl --user daemon-reload`, then restart the gateway. Check with `... systemctl --user cat openclaw-gateway` (OpenClaw's `ExecStart` plus the drop-ins from `/etc/systemd/user/`) and `sudo cat /proc/$(pgrep -u openclaw -f 'openclaw.*gateway' | head -1)/environ | tr '\0' '\n' | grep NODE_OPTIONS`.
+
+## The main agent's tools
+The assistant has no shell: `openclaw.json` denies `group:runtime` (`exec`, `process`, `code_execution`) and the `gateway` tool, and `tools.fs.workspaceOnly: true` limits `read`/`write`/`edit`/`apply_patch` to `~/.openclaw/workspace` (memory and to-dos stay writable; `openclaw.json`, `.env` and the extensions dirs are out of reach). It reaches the brokers only through the **claw-tools** plugin (`infra/openclaw-plugins/claw-tools/`, root-owned, see Plugins):
+- `calendar_list_calendars`, `calendar_events`, `calendar_create`, `calendar_update`, `calendar_delete`, `calendar_undo`, `calendar_changes` → `agent-cal` as calbot;
+- `github_issue_list`, `github_issue_view`, `github_issue_create`, `github_issue_comment`, `github_issue_label`, `github_issue_close`, `github_issue_reopen` → `agent-git` as gitbot (no `pr` or `new-repo`: repo changes go to Claude Code over ACP);
+- `claude_usage` → `claude-usage` as coder.
+
+Each tool has a strict schema (the brokers' own regexes, lengths and label allowlist) and runs `sudo -n -u <user> <broker> <verb> <args>` with an argv array, no shell, a fixed environment, a 90s timeout and a 256 KB output cap. Bodies go on stdin. A call that fails the schema never starts a process. The brokers stay the security boundary and keep all their checks. Calendar events come back with title, time, calendar and id only (no locations or notes), and calendar and issue text is wrapped as untrusted external content, like `web_fetch` results. The sudo rules are unchanged: the plugin runs inside the gateway as openclaw. `infra/tests/claw-tools.test.sh` checks every tool's exact broker call. To add a verb: add it to the broker, then a tool in `tools.js`, its name in `openclaw.plugin.json` and in `tools.alsoAllow`, and a test.
 
 ## Plugins
 OpenClaw runs native plugins in the gateway process with the gateway's access, so what loads is fixed in this repo:

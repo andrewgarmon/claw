@@ -4,11 +4,11 @@ Rules and notes for this install only. Copy this file to `workspace/local/AGENTS
 
 ## Daily briefing
 - The scheduled job is `<cron job name>`, set for <HH:MM> <IANA time zone>.
-- Calendar: today's events come from <a skill or command>, or "no calendar".
+- Calendar: today's events come from <calendar_events, a skill>, or "no calendar".
 - Extra sections, if any: <section name>, after <section>: <what goes in it>.
 
 ## GitHub issue labels
-Labels must come from: <comma-separated list; agent-git only allows labels on its own allowlist>.
+Labels must come from: <comma-separated list; the issue tools and agent-git only allow labels on their own allowlist>.
 
 ## Upstream repo
 <owner>/<repo>, or "none". With one, shared files are the ones that also exist there (AGENTS.md: Shared files and the upstream repo).
