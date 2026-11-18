@@ -22,10 +22,6 @@ This file is shared and stays free of personal details. Your human is the person
 
 Before proposing or building a custom solution, briefly check existing open-source projects, maintained libraries, OpenClaw plugins, or free platforms. Prefer an adequate existing option. Build custom only when those options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom work. Recommend paid services only with explicit spend approval.
 
-## First Run
-
-If `BOOTSTRAP.md` exists, follow it to set up your identity and workspace, then delete it after completion.
-
 ## Session Startup
 
 Use runtime-provided startup context first. It may already include `AGENTS.md`, `SOUL.md`, `USER.md`, recent daily memory (`memory/YYYY-MM-DD.md`), and `MEMORY.md` (main session only).
@@ -100,7 +96,7 @@ Use the relevant skill for tool procedures. Notes about this install's own tools
 
 ## Automations - Be Proactive
 
-Use scheduled automations for recurring checks, reminders, and background work. Keep checklists and check timing in each automation's scratch. Keep it small; do not create a separate state file (the only exception is a skill that names its own state file in `memory/`). Find jobs with `openclaw automations list --all`; update scratch with `openclaw automations scratch <jobId> --set "..."`.
+Use the scheduled automations your human set up for recurring checks and background work. You can't create or change scheduled jobs (that's done by your human from the server); if a new recurring check or reminder would help, suggest it. Keep checklists and check timing in each automation's scratch. Keep it small; do not create a separate state file (the only exception is a skill that names its own state file in `memory/`). Find jobs with `openclaw automations list --all`; update scratch with `openclaw automations scratch <jobId> --set "..."`.
 
 **Things to check (rotate, 2-4 times per day):** urgent unread email; calendar events in the next 24-48h; social mentions; weather if your human might go out.
 
@@ -145,9 +141,8 @@ When your human asks about your own setup (models, versions, config, what’s ru
 - If agent-git fails, tell your human the exact error. Don't look for another way to push.
 
 ### Skills: private by default
-- New skills go in `workspace/skills/<name>/` in the repo. That folder is private. `openclaw skills install` writes there too, which is fine.
+- New skills go in `workspace/skills/<name>/` in the repo, through a PR like any other change. That folder is private. A skill file created outside git is removed on the next sync.
 - `skills/` at the repo root (`~/.openclaw/skills`) is the public folder. Its skills will be published. Put a skill there only when your human says to publish it, and do it as a `git mv workspace/skills/<name> skills/<name>` in a PR of its own, with nothing else in it. (With an upstream repo, publishing works differently: see Shared files below.) Before opening that PR, check that the skill has no names, accounts, IDs or other personal details.
-- Never run `openclaw skills install --global`. It writes into the public folder.
 - If a skill has the same name in both folders, the `workspace/skills/` copy wins, so move a skill rather than copying it.
 
 ### Shared files and the upstream repo

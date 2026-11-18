@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # claw-sync: make ~/.openclaw match origin/main. Runs as openclaw from a root-owned systemd timer.
-# - reverts local drift in tracked files (untracked/ignored state is left alone)
+# - reverts local drift in tracked files and removes untracked files (anything git neither tracks nor
+#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. Ignored state
+#   (.env, USER.md, memory/, state-backup/, ...) is left alone: git clean runs without -x.
 # - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
 # - invalid openclaw.json: not deployed (rolled back before any restart)
 # - gateway not healthy after a restart: rolls back to the last commit it was healthy on and restarts again
@@ -53,9 +55,10 @@ backup_stale() {
   [ $(( $(date +%s) - t )) -ge "$BACKUP_MAX_AGE" ] || return 1
   echo "claw-backup hasn't succeeded in $(( ($(date +%s) - t) / 3600 ))h"
 }
-ok() {  # success ping, but keep failing while origin/main is marked bad or backups are stale
+ok() {  # success ping, but fail while origin/main is marked bad, untracked files were removed or backups are stale
   local stale
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
+  [ -z "$removed" ] || die "untracked files removed: $removed ($*)"
   if stale=$(backup_stale); then
     # not die: this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute
     echo "$stale" >&2; hc fail "$stale: sudo journalctl -u claw-backup -n 20 ($*)"
@@ -73,6 +76,10 @@ healthy() {  # wait up to $1 seconds for the gateway to be active and answering 
   done
 }
 cfg_hash() { sha256sum openclaw.json | cut -d' ' -f1; }
+# untracked: files git neither tracks nor ignores. clean_tree: no drift in tracked files, none of those.
+untracked() { git ls-files --others --exclude-standard; }
+clean_tree() { git diff --quiet HEAD && [ -z "$(untracked)" ]; }
+removed=""   # untracked files this run deleted; ok() turns the success ping into a fail ping
 validate() {
   local out
   out=$(openclaw config validate 2>&1) && return 0
@@ -164,7 +171,7 @@ fi
 # this path needs HEAD == origin/main with no drift, so a forged value can never skip a deploy or a
 # drift revert. A future, garbage or stale value means a full run. Rewriting it every minute would only
 # stop the pings, and healthchecks.io alerts on missing pings (the agent can read the ping URL anyway).
-if [ "$before" = "$target" ] && [ "$target" != "$bad" ] && [ ! -e "$STATE/pending" ] && git diff --quiet HEAD; then
+if [ "$before" = "$target" ] && [ "$target" != "$bad" ] && [ ! -e "$STATE/pending" ] && clean_tree; then
   last=$(cat "$STATE/last-full" 2>/dev/null || true)
   case $last in ''|*[!0-9]*|???????????*) last=0 ;; esac
   age=$(( $(date +%s) - 10#$last ))   # 10#: a leading zero would otherwise be read as octal
@@ -172,7 +179,7 @@ if [ "$before" = "$target" ] && [ "$target" != "$bad" ] && [ ! -e "$STATE/pendin
 fi
 
 # Nothing to deploy: just report health.
-if [ "$before" = "$want" ] && git diff --quiet HEAD; then
+if [ "$before" = "$want" ] && clean_tree; then
   healthy "$IDLE_WAIT" || die "gateway not healthy at ${before:0:7} (no deploy this run)"
   echo "$before" > "$STATE/good"
   ok "up to date at ${before:0:7}, gateway healthy"
@@ -182,9 +189,18 @@ cfg_before=$(cfg_hash)
 cfg_new=$(git show "$want:openclaw.json" | sha256sum | cut -d' ' -f1)
 # Mark the deploy pending before the tree changes, so a run killed during validate/restart is resumed.
 [ "$cfg_new" = "$cfg_before" ] || echo "$want" > "$STATE/pending"
-[ "$before" = "$want" ] && echo "reverting local drift: $(git diff --name-only HEAD | tr '\n' ' ')"
+[ "$before" = "$want" ] && ! git diff --quiet HEAD && echo "reverting local drift: $(git diff --name-only HEAD | tr '\n' ' ')"
 git checkout -q main 2>/dev/null || true
 git reset -q --hard "$want"
+# listed after the reset, so a file the new commit tracks isn't reported; -x is never passed
+left=$(untracked)
+if [ -n "$left" ]; then
+  n=$(printf '%s\n' "$left" | wc -l)
+  removed=$(printf '%s\n' "$left" | sed -n '1,20p' | tr '\n' ' ')
+  [ "$n" -le 20 ] || removed+="(and $((n - 20)) more)"
+  echo "removing untracked files: $removed" >&2
+  git clean -fdq
+fi
 echo "synced ${before:0:7} -> ${want:0:7}"
 
 if [ "$cfg_new" = "$cfg_before" ]; then

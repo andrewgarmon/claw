@@ -155,7 +155,9 @@
       "presence",
       "heartbeat_respond",
       "plugins",
-      "secrets"
+      "secrets",
+      "skill_workshop",
+      "cron"
     ],
     "web": {
       "search": {
@@ -187,6 +189,11 @@
       },
       "diagnose-gateway": {
         "enabled": false
+      }
+    },
+    "workshop": {
+      "autonomous": {
+        "mode": "off"
       }
     }
   },
