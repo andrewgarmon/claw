@@ -66,8 +66,12 @@ g checkout -q -B "$BRANCH"
 # whatever is in the workspace now, as one tar with fixed metadata (same state -> same bytes)
 work=$(mktemp -d); trap 'rc=$?; rm -rf "$work"; on_exit "$rc"' EXIT
 present=(); for item in "${ITEMS[@]}"; do [ -e "$WS/$item" ] && present+=("$item"); done
-tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu --exclude=.git \
-  -C "$WS" -cf "$work/state.tar" "${present[@]}" --files-from=/dev/null
+# exit 1 is GNU tar's "a file changed while it was read" (the agent writing memory at 03:30): the
+# archive is still complete, and tomorrow's run catches the change. Anything else is a failure.
+trc=0
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu --exclude=.git --warning=no-file-changed \
+  -C "$WS" -cf "$work/state.tar" "${present[@]}" --files-from=/dev/null || trc=$?
+[ "$trc" -le 1 ] || { echo "tar failed (exit $trc)" >&2; exit 1; }
 sum=$(cat "$work/state.tar" "$AGE_RECIPIENTS" | sha256sum | cut -d' ' -f1)
 if [ "$sum" != "$(cat "$STATE/state-sum" 2>/dev/null)" ] || [ ! -e "$REPO/state.tar.age" ]; then
   age -R "$AGE_RECIPIENTS" -o "$REPO/state.tar.age.new" "$work/state.tar"

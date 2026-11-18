@@ -106,6 +106,20 @@ echo "not a key" > "$T/backup.age.pub"
 run
 check "malformed public key: same" '[ $rc != 0 ] && grep -q "no age public key" "$T/out" && [ "$(git -C "$S" rev-parse HEAD)" = "$c2" ]'
 mv "$T/pub.off" "$T/backup.age.pub"
+# GNU tar exits 1 when a file changes while it's read; that's not a failed backup
+cat > "$BIN/tar" <<'EOF'
+#!/bin/bash
+/usr/bin/tar "$@" || exit $?
+[ -e "$TAR_RC_FILE" ] && exit "$(cat "$TAR_RC_FILE")"
+exit 0
+EOF
+chmod +x "$BIN/tar"; export TAR_RC_FILE=$T/tar_rc; echo 1 > "$T/tar_rc"; echo "more" >> "$W/MEMORY.md"
+run
+check "tar exit 1 (a file changed while read): still backs up" '[ $rc = 0 ] && grep -q "committed" "$T/out" && [ ! -s "$T/curl.log" ]'
+echo 2 > "$T/tar_rc"; echo "more" >> "$W/MEMORY.md"
+run
+check "tar exit 2: a failed backup, fail-pinged" '[ $rc != 0 ] && grep -q "tar failed (exit 2)" "$T/out" && grep -q "hc.example/check/fail" "$T/curl.log"'
+rm "$T/tar_rc" "$BIN/tar"
 rm -f "$W/USER.md" "$W/MEMORY.md"; rm -rf "$W/memory"
 run
 check "empty workspace: still backs up (an empty archive)" '[ $rc = 0 ] && grep -q "committed" "$T/out"'
