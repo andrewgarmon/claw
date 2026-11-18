@@ -105,7 +105,7 @@ repo_visibility() {
   REPO_DEFAULT=${info#* }
   [[ $REPO_DEFAULT =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || REPO_DEFAULT=
   if [ "$REPO_PUBLIC" = 0 ] && [ -r "$PUBLIC_REPOS_FILE" ]; then
-    for r in $(grep -v '^[[:space:]]*#' "$PUBLIC_REPOS_FILE"); do [ "$r" = "$1" ] && REPO_PUBLIC=1; done
+    for r in $(grep -v '^[[:space:]]*#' "$PUBLIC_REPOS_FILE"); do [ "${r,,}" = "$1" ] && REPO_PUBLIC=1; done  # $1 is lowercased
   fi
   return 0
 }
