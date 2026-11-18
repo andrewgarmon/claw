@@ -86,9 +86,10 @@ echo "secret-marker-user" > "$W/USER.md"; mkdir -p "$W/memory/.git"; echo x > "$
 mkdir -p "$S/memory"; echo "old plaintext" > "$S/memory/old.md"; git -C "$S" add -A; git -C "$S" -c user.name=t -c user.email=t@t commit -qm old
 run
 check "commits only ciphertext (plus README): no plaintext files in the tree" \
-  '[ $rc = 0 ] && [ "$(git -C "$S" ls-tree -r --name-only HEAD | grep -v "^README.md$" | paste -sd " " -)" = "state.tar.age" ]'
+  '[ $rc = 0 ] && [ "$(git -C "$S" ls-tree -r --name-only HEAD | grep -v "^README.md$" | paste -sd " " -)" = "state.tar.gz.age" ]'
 check "no plaintext anywhere in the new commit" '! git -C "$S" show HEAD | grep -q "secret-marker"'
-mkdir -p "$T/restore" && decrypt "$S/state.tar.age" | tar -x -C "$T/restore"
+check "the ciphertext holds a gzip stream (compressed before encryption)" 'decrypt "$S/state.tar.gz.age" | head -c 2 | od -An -tx1 | grep -q "1f 8b"'
+mkdir -p "$T/restore" && decrypt "$S/state.tar.gz.age" | tar -xz -C "$T/restore"
 check "decrypting reproduces the workspace state (memory/.git left out)" \
   'cmp -s "$T/restore/MEMORY.md" "$W/MEMORY.md" && cmp -s "$T/restore/USER.md" "$W/USER.md" && cmp -s "$T/restore/memory/people/alex.md" "$W/memory/people/alex.md" && [ ! -e "$T/restore/memory/.git" ] && [ ! -e "$T/restore/DREAMS.md" ]'
 [ "$REAL_AGE" = 1 ] && echo "     (real age round trip)" || echo "     (age not installed: fake age stand-in)"
@@ -123,6 +124,13 @@ rm "$T/tar_rc" "$BIN/tar"
 rm -f "$W/USER.md" "$W/MEMORY.md"; rm -rf "$W/memory"
 run
 check "empty workspace: still backs up (an empty archive)" '[ $rc = 0 ] && grep -q "committed" "$T/out"'
+c3=$(git -C "$S" rev-parse HEAD); echo "grew" > "$W/MEMORY.md"
+sed "s|^MAX_BYTES=.*|MAX_BYTES=10|" "$CB" > "$T/cb-small"; grep -q "^MAX_BYTES=10$" "$T/cb-small" || echo "FAIL could not shrink MAX_BYTES"
+CB_REAL=$CB; CB=$T/cb-small; run; CB=$CB_REAL
+check "backup over the size cap: refused with a /fail ping, nothing committed or left behind" \
+  '[ $rc != 0 ] && grep -q "near GitHub.s 100 MB file limit" "$T/out" && grep -q "hc.example/check/fail" "$T/curl.log" && [ "$(git -C "$S" rev-parse HEAD)" = "$c3" ] && [ ! -e "$S/state.tar.gz.age.new" ]'
+run
+check "same state under the normal cap: committed (the refused run didn't record it as done)" '[ $rc = 0 ] && grep -q "committed" "$T/out"'
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

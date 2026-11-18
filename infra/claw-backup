@@ -3,7 +3,7 @@
 # Runs as openclaw from a root-owned systemd timer (nightly).
 # - packs USER.md, MEMORY.md, DREAMS.md and memory/** from the workspace into one tar, encrypts it
 #   with age to the public key in $AGE_RECIPIENTS (root-owned; the private key stays off the host)
-#   and commits only the ciphertext, state.tar.age, to a local git repo (~/.openclaw/state-backup,
+#   and commits only the ciphertext, state.tar.gz.age, to a local git repo (~/.openclaw/state-backup,
 #   ignored by claw-config, left alone by claw-sync). Without a key it fails (and fail-pings)
 #   rather than back up plaintext.
 # - commits only when the state (or the key) changed: age output differs every run, so the check
@@ -56,13 +56,17 @@ if [ ! -d "$REPO/.git" ]; then
   git init -q -b "$BRANCH" "$tmp"
   gd "$tmp" fetch -q "$ROOT_BUNDLE" refs/remotes/origin/main
   gd "$tmp" reset -q --hard "$ROOT_SHA"
-  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config: state.tar.age, encrypted with age (the private key is kept offline).\n' \
+  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config: state.tar.gz.age, a gzipped tar encrypted with age (the private key is kept offline).\n' \
     "$host" "$host" "$WS" > "$tmp/README.md"
   mv -T "$tmp" "$REPO"
 fi
 # the branch follows the current hostname, so after a move to a new name history continues there
 g checkout -q -B "$BRANCH"
 
+# Every commit adds the whole ciphertext to history that's never pruned (git can't delta or compress
+# it), and GitHub refuses a file over 100 MB: compress first, and refuse a backup near that size.
+MAX_BYTES=$((95 * 1024 * 1024))
+OUT=state.tar.gz.age
 # whatever is in the workspace now, as one tar with fixed metadata (same state -> same bytes)
 work=$(mktemp -d); trap 'rc=$?; rm -rf "$work"; on_exit "$rc"' EXIT
 present=(); for item in "${ITEMS[@]}"; do [ -e "$WS/$item" ] && present+=("$item"); done
@@ -73,15 +77,22 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu --ex
   -C "$WS" -cf "$work/state.tar" "${present[@]}" --files-from=/dev/null || trc=$?
 [ "$trc" -le 1 ] || { echo "tar failed (exit $trc)" >&2; exit 1; }
 sum=$(cat "$work/state.tar" "$AGE_RECIPIENTS" | sha256sum | cut -d' ' -f1)
-if [ "$sum" != "$(cat "$STATE/state-sum" 2>/dev/null)" ] || [ ! -e "$REPO/state.tar.age" ]; then
-  age -R "$AGE_RECIPIENTS" -o "$REPO/state.tar.age.new" "$work/state.tar"
-  mv -f "$REPO/state.tar.age.new" "$REPO/state.tar.age"
+if [ "$sum" != "$(cat "$STATE/state-sum" 2>/dev/null)" ] || [ ! -e "$REPO/$OUT" ]; then
+  gzip -n -9 < "$work/state.tar" > "$work/state.tar.gz"   # -n: no name or time, so same tar -> same gz
+  age -R "$AGE_RECIPIENTS" -o "$REPO/$OUT.new" "$work/state.tar.gz"
+  size=$(stat -c %s "$REPO/$OUT.new")
+  if [ "$size" -gt "$MAX_BYTES" ]; then
+    rm -f "$REPO/$OUT.new"
+    echo "encrypted backup is $((size / 1024 / 1024)) MB, near GitHub's 100 MB file limit: nothing committed. Trim memory/ or split the backup." >&2
+    exit 1
+  fi
+  mv -f "$REPO/$OUT.new" "$REPO/$OUT"
   # plaintext copies from before encryption leave the tree (older commits keep them)
   for item in "${ITEMS[@]}"; do rm -rf "${REPO:?}/$item"; done
   g add -A
   g commit -q -m "state backup $(date -I)"
   echo "$sum" > "$STATE/state-sum"
-  echo "committed $(g rev-parse --short HEAD): state.tar.age ($(stat -c %s "$REPO/state.tar.age") bytes)"
+  echo "committed $(g rev-parse --short HEAD): $OUT ($(stat -c %s "$REPO/$OUT") bytes)"
 fi
 
 head=$(g rev-parse HEAD)
