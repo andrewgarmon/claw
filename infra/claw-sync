@@ -66,7 +66,8 @@ backup_stale() {
 # belongs there).
 planted_plugins() {
   local d out=""
-  for d in extensions/* extensions/.[!.]* workspace*/.openclaw/extensions/* workspace*/.openclaw/extensions/.[!.]*; do
+  for d in extensions/* extensions/.[!.]* extensions/..?* \
+           workspace*/.openclaw/extensions/* workspace*/.openclaw/extensions/.[!.]* workspace*/.openclaw/extensions/..?*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
     case $d in extensions/*) [[ " $GLOBAL_PLUGINS " == *" ${d#extensions/} "* ]] && continue ;; esac
     out+="$d "
@@ -76,17 +77,16 @@ planted_plugins() {
 }
 ok() {  # success ping, but fail while origin/main is marked bad, untracked files were removed, an unexpected
         # plugin dir exists or backups are stale
-  local stale planted
+  local stale planted why=()
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
   [ -z "$removed" ] || die "untracked files removed: $removed ($*)"
-  if planted=$(planted_plugins); then
-    # like a stale backup: keep last-full, so it's rechecked every ~5 min rather than every minute
-    echo "unexpected OpenClaw plugin dirs: $planted" >&2; hc fail "unexpected OpenClaw plugin dirs in ~/.openclaw: $planted ($*)"
-    date +%s > "$STATE/last-full"; exit 1
-  fi
-  if stale=$(backup_stale); then
-    # not die: this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute
-    echo "$stale" >&2; hc fail "$stale: sudo journalctl -u claw-backup -n 20 ($*)"
+  # Both checks always run and one ping names every reason, so one can't hide the other. Not die:
+  # this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute.
+  planted=$(planted_plugins) && why+=("unexpected OpenClaw plugin dirs in ~/.openclaw: $planted")
+  stale=$(backup_stale) && why+=("$stale: sudo journalctl -u claw-backup -n 20")
+  if [ ${#why[@]} -gt 0 ]; then
+    local msg; msg=$(IFS=';'; echo "${why[*]}"); msg=${msg//;/; }
+    echo "$msg" >&2; hc fail "$msg ($*)"
     date +%s > "$STATE/last-full"; exit 1
   fi
   hc "$*"; date +%s > "$STATE/last-full"; exit 0

@@ -48,6 +48,11 @@ const EVENT_FIELDS = ["id", "calendar", "title", "start", "end", "all_day", "rec
 const pickEvents = (data) => (Array.isArray(data)
   ? data.map((e) => Object.fromEntries(EVENT_FIELDS.filter((k) => e && e[k] !== undefined).map((k) => [k, e[k]])))
   : data);
+// The write tools echo the event back (update: as it is now; delete and undo: as it was). Drop its
+// location and notes there too, and treat the rest (titles) as untrusted, like calendar_events.
+const dropEventText = (data) => (data && typeof data === "object" && !Array.isArray(data)
+  ? Object.fromEntries(Object.entries(data).filter(([k]) => k !== "location" && k !== "notes"))
+  : data);
 
 export const TOOLS = [
   { name: "calendar_list_calendars", label: "Calendars", description: "List the owner's calendar names.",
@@ -62,12 +67,12 @@ export const TOOLS = [
     parameters: obj({ days: { type: "integer", minimum: 1, maximum: 60, description: "Days to cover, 1-60. Default 1 (today)." },
       calendar, tz }),
     build: (p) => cal(["events", ...calOpts(p, ["days", "calendar", "tz"])]) },
-  { name: "calendar_create", label: "Create event", write: true,
+  { name: "calendar_create", label: "Create event", write: true, untrusted: true, shape: dropEventText,
     description: "Create a single event (no invitations). A repeat with the same calendar, title and start creates nothing.",
     parameters: obj({ calendar, title, start: when("Start"), end: when("End"), location, notes, tz }, ["calendar", "title", "start", "end"]),
     check: (p) => ((p.start.length === 10) !== (p.end.length === 10) ? "start and end must both be dates (all-day) or both times" : null),
     build: (p) => cal(["create", ...calOpts(p, ["calendar", "title", "start", "end", "location", "notes", "tz"])]) },
-  { name: "calendar_update", label: "Update event", write: true,
+  { name: "calendar_update", label: "Update event", write: true, untrusted: true, shape: dropEventText,
     description: "Change an event by id (single events without attendees). start alone keeps the length.",
     parameters: obj({ id: eventId, title, start: when("New start"), end: when("New end"), location, notes, tz }, ["id"]),
     check: (p) => {
@@ -76,9 +81,9 @@ export const TOOLS = [
       return null;
     },
     build: (p) => cal(["update", ...calOpts(p, ["id", "title", "start", "end", "location", "notes", "tz"])]) },
-  { name: "calendar_delete", label: "Delete event", write: true, description: "Delete an event by id (single events without attendees).",
+  { name: "calendar_delete", label: "Delete event", write: true, untrusted: true, shape: dropEventText, description: "Delete an event by id (single events without attendees).",
     parameters: obj({ id: eventId }, ["id"]), build: (p) => cal(["delete", ...calOpts(p, ["id"])]) },
-  { name: "calendar_undo", label: "Undo calendar change", write: true,
+  { name: "calendar_undo", label: "Undo calendar change", write: true, untrusted: true, shape: dropEventText,
     description: "Put back the last calendar change, or the one named (an id like c12 from calendar_changes).",
     parameters: obj({ change: s("Change id like c12.", { pattern: "^c[1-9][0-9]{0,6}$" }) }),
     build: (p) => cal(["undo", ...calOpts(p, ["change"])]) },

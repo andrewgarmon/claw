@@ -325,7 +325,14 @@ rm -rf "$O/workspace/.openclaw" "$O/extensions/.hidden"; ln -s /tmp "$O/extensio
 run; check "a symlink in an extensions dir: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/linked"'
 rm -f "$O/extensions/linked"; mkdir -p "$O/workspace-reader/.openclaw/extensions/x"; rm -f "$S/last-full"
 run; check "anything in the reader's workspace extensions dir: reported" eval '[ $rc = 1 ] && pinged /fail "workspace-reader/.openclaw/extensions/x"'
-rm -rf "$O/workspace-reader"; rm -f "$S/last-full"
+rm -rf "$O/workspace-reader"; mkdir -p "$O/extensions/..x"; rm -f "$S/last-full"
+run; check "a name starting with two dots: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/..x"'
+touch -d '27 hours ago' "$B"; rm -f "$S/last-full"
+run; check "planted plugin and stale backup at once: one ping names both" \
+  eval '[ $rc = 1 ] && pinged /fail "extensions/..x" && pinged /fail "claw-backup hasn.t succeeded in 27h" && [ -s "$S/last-full" ]'
+rm -rf "$O/extensions/..x"; rm -f "$S/last-full"
+run; check "plugin dir gone, backup still stale: the stale alert stays" eval '[ $rc = 1 ] && pinged /fail "27h" && ! pinged /fail "plugin dirs"'
+touch "$B"; rm -f "$S/last-full"
 run; check "tripwire clear: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }
