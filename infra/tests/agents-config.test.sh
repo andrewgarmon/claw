@@ -26,8 +26,8 @@ check "reader: every claw-tools write and claude_usage denied" \
   '['"$R"'.tools.deny[]] as $d | ["calendar_create","calendar_update","calendar_delete","calendar_undo","github_issue_create","github_issue_comment","github_issue_label","github_issue_close","github_issue_reopen","claude_usage"] | all(. as $t | $d | index($t))'
 check "reader: a cheaper model, low thinking, no fallback" \
   '(.agents.entries.reader.model.primary | test("flash")) and .agents.entries.reader.thinkingDefault == "low" and .agents.entries.reader.model.fallbacks == []'
-check "main: no web tools and no calendar details (those go through the reader)" \
-  '['"$M"'.tools.deny[]] as $d | ["web_search","web_fetch","calendar_event_details"] | all(. as $t | $d | index($t))'
+check "main: no web tools, calendar details or issue bodies (those go through the reader)" \
+  '['"$M"'.tools.deny[]] as $d | ["web_search","web_fetch","calendar_event_details","github_issue_view"] | all(. as $t | $d | index($t))'
 check "main keeps the global profile (no per-agent profile to widen it)" "($M.tools.profile // null) == null"
 check "plugin approvals are for main only" '.approvals.plugin.agentFilter == ["main"]'
 check "no automatic creation of bootstrap files (none for the reader to follow)" '.agents.defaults.skipBootstrap == true'

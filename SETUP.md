@@ -89,7 +89,7 @@ Step 6 replaces `~/.openclaw/openclaw.json` with your repo's, so first copy out 
 sudo -iu openclaw bash -c 'umask 077; printf "OPENCLAW_GATEWAY_TOKEN=%s\n" "$(jq -r .gateway.auth.token ~/.openclaw/openclaw.json)" >> ~/.openclaw/.env'
 sudo -iu openclaw jq -r '.auth.profiles | keys[]' /home/openclaw/.openclaw/openclaw.json
 ```
-The second command prints your auth profile ids, e.g. `google:setup-1a2b…`. In your repo (on the laptop), replace every `google:setup-101632ab-39a7-4fb0-b049-a2a4b78cb644` in `openclaw.json` with yours, under both `agents.defaults.model` and `auth.profiles`, then commit and push to main.
+The second command prints your auth profile ids, e.g. `google:setup-1a2b…`. In your repo (on the laptop), replace every `google:setup-101632ab-39a7-4fb0-b049-a2a4b78cb644` in `openclaw.json` with yours, under `agents.defaults.model`, `agents.entries.reader.model` and `auth.profiles`, then commit and push to main.
 
 **Check:** `.env` has an `OPENCLAW_GATEWAY_TOKEN=` line that isn't `null`, and your repo's `openclaw.json` names your profile id.
 

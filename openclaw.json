@@ -33,7 +33,8 @@
           "deny": [
             "web_search",
             "web_fetch",
-            "calendar_event_details"
+            "calendar_event_details",
+            "github_issue_view"
           ],
           "agentToAgent": {
             "send": [
