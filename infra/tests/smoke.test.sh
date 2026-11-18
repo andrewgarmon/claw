@@ -212,6 +212,8 @@ plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id
 run; check "a plugin loaded from the workspace: FAIL" eval '[ $rc = 1 ] && says "FAIL plugins: telegram loads from the workspace"'
 plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id":"telegram","enabled":true,"origin":"global","rootDir":"/h/.openclaw/extensions/telegram"},{"id":"acpx","enabled":true,"origin":"global","rootDir":"/h/.openclaw/extensions/acpx"}'
 run; check "an allowlisted id loading from ~/.openclaw/extensions (not acpx or duckduckgo): FAIL" eval '[ $rc = 1 ] && says "FAIL plugins:" && says "telegram loads from ~/.openclaw/extensions" && ! says "acpx loads"'
+plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id":"telegram","enabled":true,"origin":"global-extension","rootDir":"/h/.openclaw/extensions/telegram"}'
+run; check "an origin value it doesn't know (a later rename): FAIL instead of passing" eval '[ $rc = 1 ] && says "FAIL plugins: telegram has an unknown origin"'
 plugins_json "$OC/.openclaw/extensions/duckduckgo"
 run; check "root-owned plugin enabled from somewhere else: FAIL" eval '[ $rc = 1 ] && says "FAIL plugins: duckduckgo isn.t enabled from $T/ocp/duckduckgo"'
 plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id":"x;rm -rf $(id)","enabled":true,"origin":"global"}'
