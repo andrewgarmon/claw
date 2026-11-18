@@ -1,0 +1,38 @@
+name: Start config repo sync
+# On every push to main, start the private config repo's "Upstream sync" workflow, so a merge here
+# reaches it within about a minute instead of at the next daily run (which stays as a backstop).
+# Needs, in this repo's Settings → Secrets and variables → Actions:
+#   variable SYNC_DISPATCH_REPO = the config repo's name (same owner as this repo)
+#   secret   SYNC_DISPATCH_TOKEN = a fine-grained token for only that repo, with Actions: read and write
+# With the variable unset (forks, and the config repo itself, which receives this file through the
+# sync) the job is skipped, not failed. This repo's own GITHUB_TOKEN isn't used for anything.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-dispatch
+  cancel-in-progress: true   # a burst of merges starts one sync; the sync adds to an open sync PR anyway
+
+jobs:
+  dispatch:
+    if: vars.SYNC_DISPATCH_REPO != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start upstream-sync.yml in the config repo
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_DISPATCH_TOKEN }}
+          TARGET: ${{ vars.SYNC_DISPATCH_REPO }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::SYNC_DISPATCH_TOKEN isn't set: skipped (the config repo's daily sync still runs)"
+            exit 0
+          fi
+          [[ "$TARGET" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || { echo "::error::SYNC_DISPATCH_REPO isn't a repo name"; exit 1; }
+          gh workflow run upstream-sync.yml -R "$OWNER/$TARGET" --ref main
+          echo "started upstream-sync.yml in $OWNER/$TARGET"
