@@ -287,6 +287,9 @@ c31=$(commit '{"v":31}' infra/thing)
 run; check "infra/ commit after the installed one: infra-pending names it, one message, healthy ping" \
   eval '[ $rc = 0 ] && head_is $c31 && grep -q "^installed $(cat "$T/installed")$" "$P" && grep -q "^origin/main $c31$" "$P" && grep -q "{\"v\":31}" "$P" && [ "$(msgs)" = 2 ] && grep -q "merged but not installed" "$H/messages" && grep -q "sudo claw-install" "$H/messages" && pinged "" ""'
 run; check "same origin/main: no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 2 ] && [ -s "$P" ]'
+c31b=$(commit '{"v":31.5}')
+run; check "a later merge that doesn't touch infra/: still pending, no second message" \
+  eval '[ $rc = 0 ] && [ "$(msgs)" = 2 ] && grep -q "^origin/main $c31b$" "$P" && [ "$(cat "$S/infra-notified")" = "$c31" ]'
 touch "$H/msg_fail"; c32=$(commit '{"v":32}' infra/thing)
 run; check "message fails: run still healthy, not recorded as told" eval '[ $rc = 0 ] && pinged "" "" && [ "$(cat "$S/infra-notified")" = "$c31" ] && grep -q "Telegram message failed" "$T/out"'
 rm "$H/msg_fail"

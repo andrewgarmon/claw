@@ -59,7 +59,8 @@ backup_stale() {
 }
 # infra_pending: write $STATE/infra-pending (installed commit, origin/main, the infra/ commit subjects)
 # when origin/main has infra/ changes claw-install hasn't installed, else remove it, and send the owner
-# one Telegram message per origin/main commit (one in all while the installed commit is unknown).
+# one Telegram message per new infra/ commit: merges that don't touch infra/ don't repeat it (one
+# message in all while the installed commit is unknown).
 # Runs only on a healthy full run (the message goes through the gateway). Any failure here is logged
 # and ignored: the run's result never depends on it.
 infra_pending() {
@@ -68,7 +69,7 @@ infra_pending() {
   if [[ $inst =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$inst" "$target" 2>/dev/null; then
     subjects=$(git log --format='%h %s' "$inst..$target" -- infra/ | head -n 20 | LC_ALL=C tr -d '\000-\010\013-\037\177')
     [ -n "$subjects" ] || { rm -f "$STATE/infra-pending"; return 0; }
-    key=$target
+    key=$(git log -1 --format=%H "$inst..$target" -- infra/)   # newest pending infra/ commit
     msg="infra changes are merged but not installed on $(hostname):
 $subjects
 Run: sudo claw-install"
@@ -81,7 +82,7 @@ Run: sudo claw-install"
   [ -r .env ] && owner=$(sed -n 's/^TELEGRAM_ALLOW_FROM=//p' .env | tail -n1 | tr -d "\"' \r")
   [[ ${owner:-} =~ ^[0-9]{1,20}$ ]] || { echo "infra changes pending; no TELEGRAM_ALLOW_FROM to tell" >&2; return 0; }
   if timeout 60 openclaw message send --channel telegram --target "$owner" --message "$msg" >/dev/null 2>&1; then
-    echo "$key" > "$STATE/infra-notified"; echo "told the owner: infra changes pending (${target:0:7})"
+    echo "$key" > "$STATE/infra-notified"; echo "told the owner: infra changes pending (${key:0:7})"
   else
     echo "infra changes pending; the Telegram message failed (retried next full run)" >&2
   fi
