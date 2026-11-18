@@ -24,7 +24,7 @@ This repo is the shared half. The owner's private `claw-config` pulls it through
 ## Security model
 - **One job per Linux user:** the admin user (sudo), `openclaw` (the agent, no sudo), `coder` (Claude Code, read-only GitHub token), `gitbot` (GitHub writes), `calbot` (calendar password).
 - **Brokers hold the secrets.** The assistant calls typed tools that run fixed, argument-checked commands as `gitbot` or `calbot` through sudo, and never sees a token or password.
-- **Read-only deploys.** `openclaw`'s deploy key can't push, and `claw-sync` resets edits made in place and removes files added outside git (ignored state such as `.env` and memory stays). Skill Workshop and the `cron` tool are off, so the agent can't add learned skills or scheduled jobs outside a PR.
+- **Read-only deploys.** `openclaw`'s deploy key can't push, and `claw-sync` resets edits made in place and removes files added outside git (ignored state such as `.env` and memory stays). The agent's Skill Workshop and `cron` tools are off and it has no shell, so it can't add learned skills or scheduled jobs outside a PR.
 - **Writes wait for you.** Calendar changes, GitHub issue writes and hand-offs to Claude Code show you what's about to happen in Telegram and run only after you tap Approve.
 - **Plugins are allowlisted.** Only plugin ids listed in `openclaw.json` load. Plugins this repo ships are installed root-owned and loaded from that path, so a plugin dropped into an extensions folder can't load or replace them.
 - **Root plumbing is human-applied** from a root-owned clone (`claw-install`), never from the agent-writable checkout.

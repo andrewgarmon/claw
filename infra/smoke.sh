@@ -18,6 +18,7 @@ AGENT_CAL=/usr/local/bin/agent-cal
 CAL_SECRET=/home/calbot/.config/caldav.env
 OC_HOME=/home/openclaw
 OC_PLUGINS=/usr/local/lib/claw/openclaw-plugins   # root-owned plugins (install.sh, lib/openclaw-plugins.sh)
+GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected from ~/.openclaw/extensions (claw-sync has the same list)
 CONFIG_REPO=claw-config   # the repo claw-install deploys (see its REPO)
 STATE_REPO=claw-state     # agent-git's STATE_REPO
 WAIT=${CLAW_SMOKE_WAIT:-20}   # seconds per command; override only for tests
@@ -145,7 +146,8 @@ check_cal() {
 }
 
 # 7. Plugins: everything OpenClaw has enabled is in plugins.allow, none comes from the workspace
-#    extensions dir, and each root-owned plugin is enabled from its root-owned dir. Reads OpenClaw's
+#    extensions dir, none from ~/.openclaw/extensions but $GLOBAL_PLUGINS, and each root-owned plugin
+#    is enabled from its root-owned dir. Reads OpenClaw's
 #    plugin registry (`plugins list --json`), not the running gateway. Prints plugin ids only.
 check_plugins() {
   local uid rc bad
@@ -155,7 +157,7 @@ check_plugins() {
   [ "$rc" = 0 ] || { FAIL plugins "openclaw plugins list failed ($(exited $rc)); try: sudo -iu openclaw openclaw plugins list"; return; }
   # shellcheck disable=SC2024  # on purpose: openclaw reads its file, root writes its own temp copy
   sudo -n -u openclaw cat "$OC_HOME/.openclaw/openclaw.json" > "$OUT/cfg" 2>/dev/null || { FAIL plugins "can't read openclaw.json"; return; }
-  bad=$(python3 -I - "$OUT/plugins" "$OUT/cfg" "$OC_PLUGINS" <<'PY'
+  bad=$(python3 -I - "$OUT/plugins" "$OUT/cfg" "$OC_PLUGINS" "$GLOBAL_PLUGINS" <<'PY'
 import json, os, re, sys
 def name(s):  # never echo odd text from the registry
     return s if isinstance(s, str) and re.fullmatch(r"[a-z0-9@._/-]{1,64}", s) else "<odd id>"
@@ -169,6 +171,8 @@ if not allow:
     out.append("openclaw.json has no plugins.allow")
 out += ["%s isn't in plugins.allow" % name(p.get("id")) for p in plugins if allow and p.get("id") not in allow]
 out += ["%s loads from the workspace" % name(p.get("id")) for p in plugins if p.get("origin") == "workspace"]
+expected_global = set(sys.argv[4].split())
+out += ["%s loads from ~/.openclaw/extensions" % name(p.get("id")) for p in plugins if p.get("origin") == "global" and p.get("id") not in expected_global]
 root = sys.argv[3]
 ids = sorted(d for d in os.listdir(root) if not d.endswith(".new")) if os.path.isdir(root) else []
 for d in ids:
