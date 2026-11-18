@@ -50,11 +50,12 @@ broker_secret_raw "$HOME/.config/gh-token" GH_TOKEN
 # git gets the token via a credential helper reading the env, so it never appears in argv / ps
 GIT_AUTH=(-c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' -c core.hooksPath=/dev/null)
 
+# repo names are lowercased on entry (GitHub's aren't case-sensitive, the state-repo rule is)
 valid_repo()   { [[ "$1" =~ ^[A-Za-z0-9._-]{1,100}$ && "$1" != .* ]]; }
 valid_number() { [[ "$1" =~ ^[1-9][0-9]{0,8}$ ]]; }
 valid_label()  { local l; for l in "${ISSUE_LABELS[@]}"; do [ "$1" = "$l" ] && return 0; done; return 1; }
 valid_title()  { broker_valid_line $MAX_TITLE "$1"; }
-valid_body()   { [ ${#1} -le $MAX_BODY ]; }
+valid_body()   { [ "$(broker_chars "$1")" -le $MAX_BODY ]; }   # characters, not bytes
 # read_body <what>: body text from stdin into $body (see broker_read_stdin)
 read_body() { broker_read_stdin $MAX_BODY "$1"; }
 STDIN_HINT="bodies go on stdin, not as arguments: use a <<'EOF' heredoc"
@@ -100,7 +101,7 @@ repo_visibility() {
   REPO_DEFAULT=${info#* }
   [[ $REPO_DEFAULT =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || REPO_DEFAULT=
   if [ "$REPO_PUBLIC" = 0 ] && [ -r "$PUBLIC_REPOS_FILE" ]; then
-    for r in $(grep -v '^[[:space:]]*#' "$PUBLIC_REPOS_FILE"); do [ "$r" = "$1" ] && REPO_PUBLIC=1; done
+    for r in $(grep -v '^[[:space:]]*#' "$PUBLIC_REPOS_FILE"); do [ "${r,,}" = "$1" ] && REPO_PUBLIC=1; done  # $1 is lowercased
   fi
   return 0
 }
@@ -124,13 +125,21 @@ leak_check() {
   # UTF-8 locale so -i also folds non-ASCII letters (sudo leaves gitbot in the C locale)
   for f in "$dir"/*; do LC_ALL=C.UTF-8 grep -aqiF -f "$dir.redact" "$f" && hits+=" ${f##*/}"; done
   [ -z "$hits" ] || die "refused: $repo is public and the${hits} contain a redact.txt entry (not shown). Remove it and try again."
+  secret_check "$repo" "$dir" "$repo is public and"
+  log "LEAK-CHECK-OK $repo"
+}
+# secret_check <repo> <dir> <why>: refuse if gitleaks finds a secret in <dir>. The message and the
+# log name the rule and the part (file), never the match.
+secret_check() {
+  local repo=$1 dir=$2 why=$3 found rules
   # gitleaks skips lines marked gitleaks:allow; agents don't get to opt out
   sed -i 's/gitleaks:allow/gitleaks-allow-ignored/Ig' "$dir"/*
   gitleaks detect --no-git --source "$dir" --redact --exit-code 1 --report-format json --report-path "$dir.gitleaks.json" >/dev/null 2>&1 || {
-    found=$(grep -o '"File": *"[^"]*"' "$dir.gitleaks.json" 2>/dev/null | sed -e 's|.*/||' -e 's|"$||' | sort -u | paste -sd ' ' -)
-    die "refused: $repo is public and gitleaks flagged ${found:-something (or failed to run)}. Remove the secret and try again."
+    found=$(grep -o '"File": *"[^"]*"' "$dir.gitleaks.json" 2>/dev/null | sed -e 's|.*/||' -e 's|"$||' | sort -u | paste -sd ' ' -) || true
+    rules=$(grep -o '"RuleID": *"[A-Za-z0-9_.-]*"' "$dir.gitleaks.json" 2>/dev/null | sed -e 's|.*: *"||' -e 's|"$||' | sort -u | paste -sd ' ' -) || true
+    log "SECRET-FOUND $repo rules=${rules:-?} parts=${found:-?}"
+    die "refused: $why gitleaks flagged ${found:-something (or failed to run)}${rules:+ (rule: $rules)}. Remove the secret and try again."
   }
-  log "LEAK-CHECK-OK $repo"
 }
 # check_texts <repo> <name> <text> [<name> <text>]...: leak_check these texts if the repo is public
 check_texts() {
@@ -147,10 +156,10 @@ case "$cmd" in
   pr)
     [ $# -ge 3 ] || die "usage: pr <repo> <branch> <title>  (stdin: optional body, then the bundle)"
     [ $# -eq 3 ] || die "too many arguments: $STDIN_HINT, followed by the bundle"
-    repo=$1 branch=$2 title=$3
+    repo=${1,,} branch=$2 title=$3
     valid_repo "$repo"     || die "bad repo name: $repo"
     valid_branch "$branch" || die "branch must be agent/<name> or claude/<name>: $branch"
-    [ -n "$title" ] && [ ${#title} -le 200 ] || die "title empty or too long"
+    valid_title "$title" || die "title empty, too long (max $MAX_TITLE) or has control characters"
     [ -t 0 ] && die "pipe a bundle on stdin: git bundle create - $branch | sudo -u gitbot agent-git pr ..."
     state_push=0
     if [[ "$branch" == agent/state/* ]] || [ "$repo" = "$STATE_REPO" ]; then
@@ -222,6 +231,19 @@ case "$cmd" in
       leak_check "$repo" "$tmp/scan"
     fi
     if [ "$state_push" = 1 ]; then
+      # state backups are permanent history too: a token pasted in chat and saved to memory mustn't
+      # land there. Scan what this push adds on top of the branch as it is on GitHub.
+      mkdir "$tmp/scan"
+      srange=("$sha")
+      if git -C "$work" "${GIT_AUTH[@]}" fetch -q --no-tags "$REMOTE_BASE/$repo.git" "+refs/heads/$branch:refs/base/$branch" 2>/dev/null; then
+        srange+=("^refs/base/$branch")
+      fi  # else (first push): the whole history
+      git -C "$work" log -p --format= --text --unified=0 --no-renames "${srange[@]}" > "$tmp/diff" \
+        && awk '/^diff --git /{h=1; next} /^@@ /{h=0; next} !h && /^\+/' "$tmp/diff" > "$tmp/scan/added-lines" \
+        && git -C "$work" log --format=%B "${srange[@]}" > "$tmp/scan/commit-messages" \
+        || die "could not read the state commits to check them; nothing pushed"
+      secret_check "$repo" "$tmp/scan" "a state backup can't carry a secret, and"
+
       # state backups: never force. GitHub refuses a non-fast-forward, so the history can only grow.
       if ! out=$(git -C "$work" "${GIT_AUTH[@]}" push --porcelain "$REMOTE_BASE/$repo.git" "$sha:refs/heads/$branch" 2>&1); then
         if grep -q '\[rejected\]' <<< "$out"; then
@@ -261,7 +283,7 @@ case "$cmd" in
   issue)
     [ $# -ge 2 ] || die "usage: issue <repo> <title> [labels]  (stdin: body)"
     [ $# -le 3 ] || die "too many arguments: $STDIN_HINT"
-    repo=$1 title=$2 labels=${3:-}
+    repo=${1,,} title=$2 labels=${3:-}
     valid_repo "$repo"   || die "bad repo name: $repo"
     valid_title "$title" || die "title empty, too long (max $MAX_TITLE) or has control characters"
     label_args=()
@@ -284,7 +306,7 @@ case "$cmd" in
     ;;
   issue-list)
     [ $# -ge 1 ] || die "usage: issue-list <repo> [label] [state]"
-    repo=$1 label=${2:-} state=${3:-open}
+    repo=${1,,} label=${2:-} state=${3:-open}
     valid_repo "$repo" || die "bad repo name: $repo"
     [ -z "$label" ] || [[ "$label" =~ ^[A-Za-z0-9:._-]{1,50}$ ]] || die "bad label: $label"
     [[ "$state" =~ ^(open|closed|all)$ ]] || die "state must be open, closed or all: $state"
@@ -296,7 +318,7 @@ case "$cmd" in
     ;;
   issue-view)
     [ $# -ge 2 ] || die "usage: issue-view <repo> <number>"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     cd /tmp
@@ -308,7 +330,7 @@ case "$cmd" in
   issue-comment)
     [ $# -ge 2 ] || die "usage: issue-comment <repo> <number>  (stdin: comment)"
     [ $# -eq 2 ] || die "too many arguments: $STDIN_HINT"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     read_body comment
@@ -323,7 +345,7 @@ case "$cmd" in
     ;;
   issue-label)
     [ $# -ge 4 ] || die "usage: issue-label <repo> <number> <add|remove> <label>"
-    repo=$1 n=$2 op=$3 label=$4
+    repo=${1,,} n=$2 op=$3 label=$4
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     [[ "$op" =~ ^(add|remove)$ ]] || die "op must be add or remove: $op"
@@ -339,7 +361,7 @@ case "$cmd" in
   issue-close)
     [ $# -ge 2 ] || die "usage: issue-close <repo> <number>  (stdin: comment saying why, linking the PR)"
     [ $# -eq 2 ] || die "too many arguments: $STDIN_HINT"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     read_body "closing comment"
@@ -354,7 +376,7 @@ case "$cmd" in
     ;;
   issue-reopen)
     [ $# -ge 2 ] || die "usage: issue-reopen <repo> <number>"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     cd /tmp
