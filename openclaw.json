@@ -2,6 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "/home/openclaw/.openclaw/workspace",
+      "skipBootstrap": true,
       "models": {
         "google/gemini-4-argon": {},
         "google/gemini-4-hydrogen": {},
