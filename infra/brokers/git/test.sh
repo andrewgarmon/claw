@@ -51,13 +51,18 @@ case "\$1 \$2" in
   *) echo "fake gh: unexpected \$*" >&2; exit 2 ;;
 esac
 EOF
+SHA1=1111111111111111111111111111111111111111
 # fake git: logs calls, everything succeeds. log -p prints \$H/diffs, log --name-only \$H/paths,
 # cat-file \$H/commits (raw commit objects), rev-list --merges \$H/merges (what the branch would push).
 # push fails like GitHub's non-fast-forward rejection while \$H/push_reject exists.
+# rev-parse prints the next line of \$H/shas (a ref another call moves), else \$SHA1. While
+# \$H/push_sleep exists, push records start/end in \$H/order around a 1s sleep.
 cat > "$BIN/git" <<EOF
 #!/bin/bash
 printf '[%s]' "\$@" >> "$H/git.log"; echo >> "$H/git.log"
-case " \$* " in *" push "*) [ -e "$H/push_reject" ] && { printf 'To x\n!\t%s\t[rejected] (non-fast-forward)\nDone\n' "\${!#}"; exit 1; } ;; *" rev-parse "*) echo deadbeef ;; *" init "*) mkdir -p "\${!#}" ;; *" bundle verify "*) cp "\${!#}" "$H/bundle" ;; *" rev-list --merges "*) cat "$H/merges" 2>/dev/null ;; *" rev-list "*) echo deadbeef ;; *" cat-file "*) cat "$H/commits" ;; *" log -p "*) cat "$H/diffs" ;; *" --name-only "*) cat "$H/paths" ;; esac
+case " \$* " in *" push "*) [ -e "$H/push_reject" ] && { printf 'To x\n!\t%s\t[rejected] (non-fast-forward)\nDone\n' "\${!#}"; exit 1; }
+    [ -e "$H/push_sleep" ] && { echo "start \$\$" >> "$H/order"; sleep 1; echo "end \$\$" >> "$H/order"; } ;;
+  *" rev-parse "*) if [ -s "$H/shas" ]; then head -n1 "$H/shas"; sed -i 1d "$H/shas"; else echo "$SHA1"; fi ;; *" init "*) mkdir -p "\${!#}" ;; *" bundle verify "*) cp "\${!#}" "$H/bundle" ;; *" rev-list --merges "*) cat "$H/merges" 2>/dev/null ;; *" rev-list "*) echo deadbeef ;; *" cat-file "*) cat "$H/commits" ;; *" log -p "*) cat "$H/diffs" ;; *" --name-only "*) cat "$H/paths" ;; esac
 exit 0
 EOF
 # fake gitleaks: flags ghp_ tokens like the real rule, skips lines marked gitleaks:allow like the
@@ -73,6 +78,7 @@ done
 exit \$hit
 EOF
 chmod +x "$BIN"/*
+SHA1=1111111111111111111111111111111111111111
 
 fails=0
 run() {  # run <agent-git args...>; stdin from $T/stdin, emptied afterwards
@@ -168,7 +174,7 @@ check "token reaches gh via env, never argv" \
 stdin "$(printf 'Body with `ticks`\nline 2\n\n%s' "$FAKE_BUNDLE")"
 run pr claw-config claude/x "Title"
 check "pr: body from stdin before the bundle, bundle passed on intact" \
-  eval '[ $rc = 0 ] && grep -qF "[+refs/agent/claude/x:refs/heads/claude/x]" "$H/git.log" && grep -qxF "[pr][create][-R][andrewgarmon/claw-config][--head][claude/x][--title][Title][--body][Body with \`ticks\`" "$H/gh.log" && grep -qx "line 2\]" "$H/gh.log" && cmp -s "$H/bundle" <(printf "%s" "$FAKE_BUNDLE") && says /pull/7'
+  eval '[ $rc = 0 ] && grep -qF "[+$SHA1:refs/heads/claude/x]" "$H/git.log" && grep -qxF "[pr][create][-R][andrewgarmon/claw-config][--head][claude/x][--title][Title][--body][Body with \`ticks\`" "$H/gh.log" && grep -qx "line 2\]" "$H/gh.log" && cmp -s "$H/bundle" <(printf "%s" "$FAKE_BUNDLE") && says /pull/7'
 
 stdin "$FAKE_BUNDLE"
 run pr claw-config claude/x "Title"
@@ -428,8 +434,8 @@ check "new-repo: still private only" eval '[ $rc = 0 ] && called "[repo][create]
 
 # ---------- state backups ----------
 STATE_BUNDLE=$(printf '# v2 git bundle\ndeadbeef refs/heads/agent/state/claw\n\n\001\002PACK')
-force_pushed() { grep -qF "[+refs/agent/$1:refs/heads/$1]" "$H/git.log"; }
-plain_pushed() { grep -qF "[refs/agent/$1:refs/heads/$1]" "$H/git.log"; }
+force_pushed() { grep -qF "[+$SHA1:refs/heads/$1]" "$H/git.log"; }
+plain_pushed() { grep -qF "[$SHA1:refs/heads/$1]" "$H/git.log"; }
 
 stdin "$STATE_BUNDLE"
 SUDO_USER=openclaw run pr claw-state agent/state/claw "State backup: claw"
@@ -460,6 +466,30 @@ check "state branches only go to the state repo" eval 'denied "state backups go 
 stdin "$FAKE_BUNDLE"
 SUDO_USER=openclaw run pr claw-config claude/x "t"
 check "other agent branches still force-push" eval '[ $rc = 0 ] && force_pushed claude/x'
+
+# ---------- the commit pushed is the commit scanned; one pr per repo at a time ----------
+SHA2=2222222222222222222222222222222222222222
+printf '%s\n' "$SHA1" "$SHA2" "$SHA2" > "$H/shas"   # another call moves the branch ref after the first read
+printf 'tree x\nauthor Claude <c@x> 1 +0000\n\nclean\n' > "$H/commits"; printf 'diff --git a/f b/f\n@@ -0,0 +1 @@\n+fine\n' > "$H/diffs"; : > "$H/paths"
+stdin "$FAKE_BUNDLE"
+SUDO_USER=coder run pr pubrepo claude/x "t"
+check "public pr: scanned and pushed by commit id, resolved once from a per-call ref" \
+  eval '[ $rc = 0 ] && grep -qF "[+$SHA1:refs/heads/claude/x]" "$H/git.log" && ! grep -qF "$SHA2:refs/heads" "$H/git.log" && grep -q "^\[-C\]\[[^]]*\]\[rev-list\]\[$SHA1\]" "$H/git.log" && grep -qF "refs/agent-tmp/" "$H/git.log" && ! grep -qF "[+refs/heads/claude/x:refs/agent/claude/x]" "$H/git.log" && logged "PUSH pubrepo claude/x $SHA1"'
+check "the per-call ref is deleted afterwards" eval 'grep -q "\[update-ref\]\[-d\]\[refs/agent-tmp/[0-9]*/claude/x\]" "$H/git.log"'
+: > "$H/shas"
+printf 'not-a-sha\n' > "$H/shas"
+stdin "$FAKE_BUNDLE"
+SUDO_USER=openclaw run pr claw-config claude/x "t"
+check "a bundle ref that doesn't resolve to a commit: refused, nothing pushed" eval 'denied "has no commit" && ! grep -q "\[push\]" "$H/git.log"'
+: > "$H/shas"
+touch "$H/push_sleep"; : > "$H/order"; : > "$H/git.log"; : > "$H/agent-git.log"
+printf '%s' "$FAKE_BUNDLE" > "$T/b1"; printf '%s' "$FAKE_BUNDLE" > "$T/b2"
+SUDO_USER=openclaw bash "$AG" pr claw-config claude/x "one" < "$T/b1" > "$T/out1" 2>&1 & p1=$!
+SUDO_USER=openclaw bash "$AG" pr claw-config claude/x "two" < "$T/b2" > "$T/out2" 2>&1 & p2=$!
+wait $p1; r=$?; wait $p2; r=$r$?   # "00" when both succeed
+check "two prs on one repo at once: serialised (pushes never overlap), both succeed" \
+  eval '[ "$r" = 00 ] && [ "$(cut -d" " -f1 "$H/order" | paste -sd" " -)" = "start end start end" ] && [ "$(sed -n 1p "$H/order" | cut -d" " -f2)" = "$(sed -n 2p "$H/order" | cut -d" " -f2)" ]'
+rm "$H/push_sleep"
 
 touch "$H/not_gitbot"
 run issue claw-config "t"
