@@ -174,12 +174,21 @@ case "$cmd" in
     guard_write "$repo" pr
 
     work="$HOME/repos/$repo.git"
+    mkdir -p "$HOME/repos"
+    # one pr at a time per repo, from fetch to push: what's pushed is always what was scanned
+    exec 9>"$work.lock"
+    flock -w 120 9 || die "another agent-git pr for $repo is still running; try again in a minute"
     [ -d "$work" ] || git init -q --bare "$work"
     git -C "$work" config core.hooksPath /dev/null
     git -C "$work" bundle verify -q "$tmp/in.bundle" >/dev/null 2>&1 || die "invalid bundle (create it from the full branch: git bundle create - $branch)"
-    # take only the named branch out of the bundle, into a private ref
-    git -C "$work" fetch -q --no-tags "$tmp/in.bundle" "+refs/heads/$branch:refs/agent/$branch" \
+    # take only the named branch out of the bundle, into a ref of this call's own, and resolve it
+    # once: the scan and the push both use that commit id, never a ref name another call could move
+    ref="refs/agent-tmp/$$/$branch"
+    trap 'git -C "$work" update-ref -d "$ref" 2>/dev/null; rm -rf "$tmp"' EXIT
+    git -C "$work" fetch -q --no-tags "$tmp/in.bundle" "+refs/heads/$branch:$ref" \
       || die "bundle has no refs/heads/$branch"
+    sha=$(git -C "$work" rev-parse --verify -q "$ref^{commit}") && [[ $sha =~ ^[0-9a-f]{40,64}$ ]] \
+      || die "bundle has no commit on refs/heads/$branch"
     if [ "$REPO_PUBLIC" = 1 ]; then
       # check what would go public: every commit not already on the default branch (message,
       # author/committer, and the lines it adds, as text), plus the branch name, title and body.
@@ -188,7 +197,7 @@ case "$cmd" in
       printf '%s\n' "$title" > "$tmp/scan/title"
       printf '%s\n' "$body" > "$tmp/scan/body"
       printf '%s\n' "$branch" > "$tmp/scan/branch-name"
-      range=("refs/agent/$branch")
+      range=("$sha")
       if [ -n "$REPO_DEFAULT" ] && git -C "$work" "${GIT_AUTH[@]}" fetch -q --no-tags "$REMOTE_BASE/$repo.git" \
            "+refs/heads/$REPO_DEFAULT:refs/base/$REPO_DEFAULT" 2>/dev/null; then
         range+=("^refs/base/$REPO_DEFAULT")
@@ -214,7 +223,7 @@ case "$cmd" in
     fi
     if [ "$state_push" = 1 ]; then
       # state backups: never force. GitHub refuses a non-fast-forward, so the history can only grow.
-      if ! out=$(git -C "$work" "${GIT_AUTH[@]}" push --porcelain "$REMOTE_BASE/$repo.git" "refs/agent/$branch:refs/heads/$branch" 2>&1); then
+      if ! out=$(git -C "$work" "${GIT_AUTH[@]}" push --porcelain "$REMOTE_BASE/$repo.git" "$sha:refs/heads/$branch" 2>&1); then
         if grep -q '\[rejected\]' <<< "$out"; then
           log "PUSH-REFUSED non-fast-forward $repo $branch"
           die "refused: this would replace the history of $branch on $repo (non-fast-forward). If ~/.openclaw/state-backup was lost or rebuilt, restore it from the branch (infra/README.md: Restoring state); nothing was pushed."
@@ -223,10 +232,10 @@ case "$cmd" in
       fi
     else
       # push only to the same agent branch on GitHub (force is fine: it's the agent's own branch)
-      git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+refs/agent/$branch:refs/heads/$branch" \
+      git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+$sha:refs/heads/$branch" \
         || die "push failed for $repo $branch"
     fi
-    log "PUSH $repo $branch $(git -C "$work" rev-parse "refs/agent/$branch")"
+    log "PUSH $repo $branch $sha"
 
     cd "$tmp"
     url=$(gh pr list -R "$OWNER/$repo" --head "$branch" --state open --json url --jq '.[0].url // empty')
