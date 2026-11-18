@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # claw-backup: snapshot the assistant's agent-owned state into the private claw-state repo.
 # Runs as openclaw from a root-owned systemd timer (nightly).
-# - copies USER.md, MEMORY.md, DREAMS.md and memory/** from the workspace into a local
-#   git repo (~/.openclaw/state-backup, ignored by claw-config, left alone by claw-sync)
-# - commits only when something changed, so the history is one commit per day with changes
+# - packs USER.md, MEMORY.md, DREAMS.md and memory/** from the workspace into one tar, encrypts it
+#   with age to the public key in $AGE_RECIPIENTS (root-owned; the private key stays off the host)
+#   and commits only the ciphertext, state.tar.age, to a local git repo (~/.openclaw/state-backup,
+#   ignored by claw-config, left alone by claw-sync). Without a key it fails (and fail-pings)
+#   rather than back up plaintext.
+# - commits only when the state (or the key) changed: age output differs every run, so the check
+#   is a hash of the plaintext tar and the key, kept in the local state dir, never in the repo
 # - publishes through agent-git like any other agent push: branch agent/state/<host>,
 #   with one long-lived PR on claw-state that it keeps updating. Nothing needs merging.
 # - every successful run, including "nothing new", touches ~/.cache/claw-backup/last-ok; claw-sync
@@ -14,6 +18,7 @@ export PATH=/usr/local/bin:/usr/bin:/bin
 WS=$HOME/.openclaw/workspace
 REPO=$HOME/.openclaw/state-backup
 ITEMS=(USER.md MEMORY.md DREAMS.md memory)
+AGE_RECIPIENTS=/etc/claw/backup.age.pub   # one age1... public key per line; root-owned
 host=$(hostname -s | tr -c 'A-Za-z0-9._\n-' '-')
 BRANCH=agent/state/$host
 STATE=$HOME/.cache/claw-backup; mkdir -p "$STATE"
@@ -28,14 +33,17 @@ fail_ping() {
   [ -n "$hc" ] || { echo "no HEALTHCHECKS_PING_URL; failure not reported" >&2; return 0; }
   curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$1" "$hc/fail" || echo "healthcheck ping failed" >&2
 }
-on_exit() {
-  local rc=$?
+on_exit() {  # on_exit [exit status]
+  local rc=${1:-$?}
   [ "$rc" != 0 ] || { touch "$STATE/last-ok"; return 0; }
   fail_ping "claw-backup failed on $host (exit $rc), backup not pushed: sudo journalctl -u claw-backup -n 20"
 }
 trap on_exit EXIT
 
 [ -d "$WS" ] || { echo "no workspace at $WS" >&2; exit 1; }
+command -v age >/dev/null || { echo "age isn't installed (sudo claw-install)" >&2; exit 1; }
+grep -qE '^age1[0-9a-z]{58}$' "$AGE_RECIPIENTS" 2>/dev/null \
+  || { echo "no age public key in $AGE_RECIPIENTS; nothing backed up (infra/README.md: state backup)" >&2; exit 1; }
 gd() { git -C "$1" -c user.name=Assistant -c user.email=assistant@claw.invalid -c core.hooksPath=/dev/null "${@:2}"; }
 g() { gd "$REPO" "$@"; }
 # claw-state's main is GitHub's "Initial commit". History must start from it or GitHub
@@ -48,24 +56,28 @@ if [ ! -d "$REPO/.git" ]; then
   git init -q -b "$BRANCH" "$tmp"
   gd "$tmp" fetch -q "$ROOT_BUNDLE" refs/remotes/origin/main
   gd "$tmp" reset -q --hard "$ROOT_SHA"
-  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config.\n' \
+  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config: state.tar.age, encrypted with age (the private key is kept offline).\n' \
     "$host" "$host" "$WS" > "$tmp/README.md"
   mv -T "$tmp" "$REPO"
 fi
 # the branch follows the current hostname, so after a move to a new name history continues there
 g checkout -q -B "$BRANCH"
 
-# mirror: whatever is in the workspace now, including deletions
-for item in "${ITEMS[@]}"; do
-  rm -rf "${REPO:?}/$item"
-  [ -e "$WS/$item" ] && cp -a "$WS/$item" "$REPO/$item"
-done
-find "$REPO/memory" -mindepth 1 -name .git -prune -exec rm -rf {} + 2>/dev/null || true
-
-g add -A
-if ! g diff --cached --quiet; then
+# whatever is in the workspace now, as one tar with fixed metadata (same state -> same bytes)
+work=$(mktemp -d); trap 'rc=$?; rm -rf "$work"; on_exit "$rc"' EXIT
+present=(); for item in "${ITEMS[@]}"; do [ -e "$WS/$item" ] && present+=("$item"); done
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu --exclude=.git \
+  -C "$WS" -cf "$work/state.tar" "${present[@]}" --files-from=/dev/null
+sum=$(cat "$work/state.tar" "$AGE_RECIPIENTS" | sha256sum | cut -d' ' -f1)
+if [ "$sum" != "$(cat "$STATE/state-sum" 2>/dev/null)" ] || [ ! -e "$REPO/state.tar.age" ]; then
+  age -R "$AGE_RECIPIENTS" -o "$REPO/state.tar.age.new" "$work/state.tar"
+  mv -f "$REPO/state.tar.age.new" "$REPO/state.tar.age"
+  # plaintext copies from before encryption leave the tree (older commits keep them)
+  for item in "${ITEMS[@]}"; do rm -rf "${REPO:?}/$item"; done
+  g add -A
   g commit -q -m "state backup $(date -I)"
-  echo "committed $(g rev-parse --short HEAD): $(g show --stat --format= HEAD | tail -1)"
+  echo "$sum" > "$STATE/state-sum"
+  echo "committed $(g rev-parse --short HEAD): state.tar.age ($(stat -c %s "$REPO/state.tar.age") bytes)"
 fi
 
 head=$(g rev-parse HEAD)

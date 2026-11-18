@@ -1,14 +1,35 @@
 #!/bin/bash
-# Tests for infra/claw-backup: a failed or refused push pings /fail; a good one doesn't.
-# Runs a copy with HOME and PATH pointed into a temp dir; agent-git (via sudo) and curl are faked.
+# shellcheck disable=SC2034  # rc, c1 and c2 are read inside check's eval strings
+# Tests for infra/claw-backup: a failed or refused push pings /fail; a good one doesn't; only
+# ciphertext is committed, and it decrypts to the workspace state.
+# Runs a copy with HOME, PATH and the age key file pointed into a temp dir; agent-git (via sudo) and
+# curl are faked. Uses the real age when installed (a full encrypt/decrypt round trip), otherwise a
+# reversible stand-in.
 set -uo pipefail
 D=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 H=$T/home BIN=$T/bin CB=$T/claw-backup
 mkdir -p "$H/.openclaw/workspace" "$BIN"
 sed -e "s|^export HOME=/home/openclaw$|export HOME=$H|" \
-    -e "s|^export PATH=/usr/local/bin:/usr/bin:/bin$|export PATH=$BIN:/usr/bin:/bin|" "$D/claw-backup" > "$CB"
-[ "$(grep -c "^export HOME=$H$\|^export PATH=$BIN:" "$CB")" = 2 ] || { echo "FAIL could not point claw-backup at the test dir"; exit 1; }
+    -e "s|^export PATH=/usr/local/bin:/usr/bin:/bin$|export PATH=$BIN:/usr/bin:/bin|" \
+    -e "s|^AGE_RECIPIENTS=.*|AGE_RECIPIENTS=$T/backup.age.pub|" "$D/claw-backup" > "$CB"
+[ "$(grep -c "^export HOME=$H$\|^export PATH=$BIN:\|^AGE_RECIPIENTS=$T/" "$CB")" = 3 ] || { echo "FAIL could not point claw-backup at the test dir"; exit 1; }
+
+# the key pair: real age-keygen if there is one, else a fixed fake key and a reversible fake age
+if [ "${FAKE_AGE:-}" != 1 ] && command -v age >/dev/null && command -v age-keygen >/dev/null; then
+  REAL_AGE=1; age-keygen -o "$T/key.txt" 2>/dev/null; age-keygen -y "$T/key.txt" > "$T/backup.age.pub"
+  decrypt() { age -d -i "$T/key.txt" "$1"; }
+else
+  REAL_AGE=0; echo "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" > "$T/backup.age.pub"
+  cat > "$BIN/age" <<'EOF'
+#!/bin/bash
+# fake age -R <file> -o <out> <in>: a header and base64, so plaintext never shows as-is
+while [ $# -gt 1 ]; do case "$1" in -R) shift 2 ;; -o) out=$2; shift 2 ;; *) shift ;; esac; done
+{ echo "age-encryption.org/v1 (fake)"; base64 -w0 "$1"; echo; } > "$out"
+EOF
+  chmod +x "$BIN/age"
+  decrypt() { tail -n +2 "$1" | base64 -d; }
+fi
 
 # fake sudo -> agent-git: reads the body+bundle, refuses like a non-fast-forward while $T/reject exists
 cat > "$BIN/sudo" <<EOF
@@ -26,10 +47,11 @@ chmod +x "$BIN"/*
 host=$(hostname -s | tr -c 'A-Za-z0-9._\n-' '-')
 git init -q -b "agent/state/$host" "$H/.openclaw/state-backup"
 echo "HEALTHCHECKS_PING_URL=https://hc.example/check" > "$H/.openclaw/.env"
+ENV_LINE="HEALTHCHECKS_PING_URL=https://hc.example/check"
 
 pass=0 fail=0
 check() { if eval "$2"; then echo "ok   $1"; pass=$((pass+1)); else echo "FAIL $1"; sed 's/^/     /' "$T/out" "$T/curl.log" 2>/dev/null; fail=$((fail+1)); fi; }
-# shellcheck disable=SC2034  # rc is read inside check's eval strings
+# shellcheck disable=SC2034  # rc, c1, c2 are read inside check's eval strings
 run() { : > "$T/curl.log"; bash "$CB" > "$T/out" 2>&1; rc=$?; }
 
 echo "v1" > "$H/.openclaw/workspace/MEMORY.md"
@@ -55,6 +77,38 @@ check "nothing new after a good retry: exit 0, no ping" '[ $rc = 0 ] && [ ! -s "
 touch -d '2 days ago' "$H/.cache/claw-backup/last-ok"
 run
 check "nothing new: still touches last-ok" '[ $rc = 0 ] && grep -q "nothing new" "$T/out" && [ -n "$(find "$H/.cache/claw-backup/last-ok" -newermt "1 minute ago")" ]'
+
+# ---------- encryption ----------
+echo "$ENV_LINE" > "$H/.openclaw/.env"
+S=$H/.openclaw/state-backup W=$H/.openclaw/workspace
+mkdir -p "$W/memory/people"; echo "secret-marker-memory" > "$W/MEMORY.md"; echo "secret-marker-person" > "$W/memory/people/alex.md"
+echo "secret-marker-user" > "$W/USER.md"; mkdir -p "$W/memory/.git"; echo x > "$W/memory/.git/HEAD"
+mkdir -p "$S/memory"; echo "old plaintext" > "$S/memory/old.md"; git -C "$S" add -A; git -C "$S" -c user.name=t -c user.email=t@t commit -qm old
+run
+check "commits only ciphertext (plus README): no plaintext files in the tree" \
+  '[ $rc = 0 ] && [ "$(git -C "$S" ls-tree -r --name-only HEAD | grep -v "^README.md$" | paste -sd " " -)" = "state.tar.age" ]'
+check "no plaintext anywhere in the new commit" '! git -C "$S" show HEAD | grep -q "secret-marker"'
+mkdir -p "$T/restore" && decrypt "$S/state.tar.age" | tar -x -C "$T/restore"
+check "decrypting reproduces the workspace state (memory/.git left out)" \
+  'cmp -s "$T/restore/MEMORY.md" "$W/MEMORY.md" && cmp -s "$T/restore/USER.md" "$W/USER.md" && cmp -s "$T/restore/memory/people/alex.md" "$W/memory/people/alex.md" && [ ! -e "$T/restore/memory/.git" ] && [ ! -e "$T/restore/DREAMS.md" ]'
+[ "$REAL_AGE" = 1 ] && echo "     (real age round trip)" || echo "     (age not installed: fake age stand-in)"
+c1=$(git -C "$S" rev-parse HEAD)
+run
+check "unchanged state: no new commit even though age output would differ" '[ $rc = 0 ] && [ "$(git -C "$S" rev-parse HEAD)" = "$c1" ] && grep -q "nothing new" "$T/out"'
+echo "changed" >> "$W/memory/people/alex.md"
+run
+check "changed state: a new encrypted commit" '[ $rc = 0 ] && [ "$(git -C "$S" rev-parse HEAD)" != "$c1" ] && grep -q "committed" "$T/out"'
+c2=$(git -C "$S" rev-parse HEAD); mv "$T/backup.age.pub" "$T/pub.off"
+run
+check "no public key: fails with a /fail ping, nothing committed" \
+  '[ $rc != 0 ] && grep -q "no age public key" "$T/out" && grep -q "hc.example/check/fail" "$T/curl.log" && [ "$(git -C "$S" rev-parse HEAD)" = "$c2" ]'
+echo "not a key" > "$T/backup.age.pub"
+run
+check "malformed public key: same" '[ $rc != 0 ] && grep -q "no age public key" "$T/out" && [ "$(git -C "$S" rev-parse HEAD)" = "$c2" ]'
+mv "$T/pub.off" "$T/backup.age.pub"
+rm -f "$W/USER.md" "$W/MEMORY.md"; rm -rf "$W/memory"
+run
+check "empty workspace: still backs up (an empty archive)" '[ $rc = 0 ] && grep -q "committed" "$T/out"'
 
 echo "$pass passed, $fail failed"
 [ "$fail" = 0 ]

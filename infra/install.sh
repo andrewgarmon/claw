@@ -46,6 +46,8 @@ broker_prune brokers
 
 # --- deploy timer (claw-sync) + nightly state backup (claw-backup)
 command -v curl >/dev/null || apt-get install -y curl   # claw-sync healthchecks pings
+command -v age >/dev/null || apt-get install -y age     # claw-backup encrypts state with it
+install -d -m 755 -o root -g root /etc/claw             # backup.age.pub: the backup's public key
 install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
 install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
 install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
@@ -94,6 +96,7 @@ as_user coder test -s /home/coder/.config/coder.env || echo "TODO: coder read-on
 as_user openclaw grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
 as_user openclaw grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
 as_user coder test -x /home/coder/.local/bin/claude || echo "TODO: install + log in Claude Code as coder (README)"
+grep -qE '^age1[0-9a-z]{58}$' /etc/claw/backup.age.pub 2>/dev/null || echo "TODO: age public key for state backups in /etc/claw/backup.age.pub; claw-backup fails until it's there (infra/README.md: state backup)"
 cmp -s acp/package-lock.json "$ACP/package-lock.json" && [ -x "$ACP/node_modules/.bin/claude-agent-acp" ] \
   || echo "TODO: the pinned ACP adapter isn't installed (needs Node/npm; README: Claude Code). Re-run: sudo claw-install"
 echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload, then restart the gateway"
