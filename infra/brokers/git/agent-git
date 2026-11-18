@@ -55,7 +55,7 @@ valid_repo()   { [[ "$1" =~ ^[A-Za-z0-9._-]{1,100}$ && "$1" != .* ]]; }
 valid_number() { [[ "$1" =~ ^[1-9][0-9]{0,8}$ ]]; }
 valid_label()  { local l; for l in "${ISSUE_LABELS[@]}"; do [ "$1" = "$l" ] && return 0; done; return 1; }
 valid_title()  { broker_valid_line $MAX_TITLE "$1"; }
-valid_body()   { [ ${#1} -le $MAX_BODY ]; }
+valid_body()   { [ "$(broker_chars "$1")" -le $MAX_BODY ]; }   # characters, not bytes
 # read_body <what>: body text from stdin into $body (see broker_read_stdin)
 read_body() { broker_read_stdin $MAX_BODY "$1"; }
 STDIN_HINT="bodies go on stdin, not as arguments: use a <<'EOF' heredoc"

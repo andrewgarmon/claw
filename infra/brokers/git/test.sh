@@ -211,6 +211,12 @@ check "issue: 20001-char body denied" eval 'denied "body too long" && no_gh'
 stdin "$(printf 'x%.0s' {1..20000})"
 run issue claw-config "t"
 check "issue: 20000-char body allowed" eval '[ $rc = 0 ]'
+stdin "$(printf 'é%.0s' {1..20000})"
+run issue claw-config "t"
+check "issue: 20000 two-byte characters allowed (the limit is characters, not bytes)" eval '[ $rc = 0 ]'
+stdin "$(printf 'é%.0s' {1..20001})"
+run issue claw-config "t"
+check "issue: 20001 two-byte characters denied" eval 'denied "body too long" && no_gh'
 stdin "$(printf 'x%.0s' {1..100000})"
 run issue claw-config "t"
 check "issue: huge body denied" eval 'denied "body too long" && no_gh'
@@ -499,6 +505,9 @@ rm "$H/push_sleep"
 run issue-list "$(printf 'x\nTIME caller=coder PUSH claw claude/ok\033[31m')"
 check "a refused argument can't forge a log line or carry escapes: one line, no control characters" \
   eval '[ $rc = 1 ] && [ "$(wc -l < "$H/agent-git.log")" = 1 ] && ! LC_ALL=C grep -q "[[:cntrl:]]" <(tr -d "\n" < "$H/agent-git.log")'
+run issue-list $'x\xc2\x9b2J\xc2\x9d0;evil\x07y ok-é'
+check "UTF-8 C1 controls (U+009B CSI, U+009D OSC) are stripped from the log too; printable Unicode stays" \
+  eval '[ $rc = 1 ] && ! grep -q $'"'"'\xc2[\x80-\x9f]'"'"' "$H/agent-git.log" && grep -q "x2j0;evily ok-é" "$H/agent-git.log"'
 run issue-list "$(printf 'y%.0s' {1..1000})"
 check "log entries are capped" eval '[ $rc = 1 ] && [ "$(wc -c < "$H/agent-git.log")" -lt 400 ]'
 run issue-list "$(head -c 120000 /dev/zero | tr '\0' 'z')"

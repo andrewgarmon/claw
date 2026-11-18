@@ -11,15 +11,17 @@
 # env_reset): [a-z] and [0-9] are ASCII only, and ${#x} counts bytes.
 export LC_ALL=C
 
-# broker_log: one line per entry. A refused argument lands here unvalidated, so control characters
-# (newlines, escapes) are stripped and the entry is capped at 300 bytes: no forged lines, nothing
+# broker_log: one line per entry. A refused argument lands here unvalidated, so everything but
+# printable characters is stripped (newlines, escapes, and the UTF-8 C1 controls such as U+009B, a
+# terminal escape introducer) and the entry is capped at 300 characters: no forged lines, nothing
 # that drives a terminal tailing the log.
 broker_log() {
-  # no pipe: with an argument bigger than a pipe buffer, `tr | head -c` would die of SIGPIPE under
-  # pipefail, and set -e would end the broker before the entry was written. [[:cntrl:]] in the C
-  # locale (exported above) is exactly \000-\037 and \177.
-  local entry=$*
-  entry=${entry//[[:cntrl:]]/}
+  # No pipe: with an argument bigger than a pipe buffer, `tr | head -c` would die of SIGPIPE under
+  # pipefail, and set -e would end the broker before the entry was written. Matched in C.UTF-8 so
+  # [:print:] keeps printable Unicode but not C1; invalid UTF-8 (or no C.UTF-8 on the host) makes
+  # bash match byte by byte, which strips every non-ASCII byte: stricter, still safe.
+  local LC_ALL=C.UTF-8 entry=$*
+  entry=${entry//[^[:print:]]/}
   printf '%s caller=%s %s\n' "$(date -Is)" "${SUDO_USER:-?}" "${entry:0:300}" >> "$LOG"
 }
 log() { broker_log "$@"; }
@@ -54,12 +56,15 @@ broker_secret_env() {
 
 # broker_read_stdin <max_chars> <what>: stdin into $body, trailing newlines dropped. A terminal
 # on stdin counts as no input. Reads at most 4 bytes per allowed char (UTF-8), so overlong input
-# is still caught without reading unbounded data.
+# is still caught without reading unbounded data. The limit is in characters (counted in C.UTF-8,
+# see broker_chars), so non-Latin text gets the same room as ASCII.
 broker_read_stdin() {
   body=
   if [ ! -t 0 ]; then body=$(head -c $(( $1 * 4 + 1 ))); fi
-  [ ${#body} -le "$1" ] || die "$2 too long (max $1)"
+  [ "$(broker_chars "$body")" -le "$1" ] || die "$2 too long (max $1)"
 }
+# broker_chars <text>: its length in characters (bytes if it isn't valid UTF-8)
+broker_chars() { local LC_ALL=C.UTF-8; echo "${#1}"; }
 
 # broker_valid_line <max_chars> <value>: non-empty, at most max chars, no control characters
 # (so no newlines). For names and titles that end up in logs or other tools' arguments.
