@@ -17,6 +17,17 @@ else
 fi
 printf '%-24s %s\n' "openclaw-gateway" "$gw"
 
+section "infra install"
+inst=$(head -c 40 /var/lib/claw-install/last 2>/dev/null)
+printf '%-24s %s\n' "installed (claw-install)" "${inst:-unknown}"
+pend=/home/openclaw/.cache/claw-sync/infra-pending
+if [ -s "$pend" ]; then
+  echo "merged but not installed (as of the last full claw-sync run; run sudo claw-install):"
+  sed -n '3,$p' "$pend" | sed 's/^/  /'
+else
+  echo "nothing pending (as of the last full claw-sync run)"
+fi
+
 section "claw-sync (last 3 log lines)"
 journalctl -u claw-sync -n 3 --no-pager -o short-iso 2>&1
 

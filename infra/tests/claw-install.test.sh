@@ -76,7 +76,7 @@ run -y
 check "installs origin/main from a fresh clone, never the tampered checkout" \
   eval '[ $rc = 0 ] && [ "$(wc -l < "$T/installed")" = 1 ] && grep -q "^v1 $T/work/claw-install\.[A-Za-z0-9]*/repo/infra " "$T/installed" && ! grep -q EVIL "$T/installed"'
 check "install.sh runs with umask 022 and gets the commit" eval 'grep -q " 0022 $sha1$" "$T/installed"'
-check "records the installed commit" eval '[ "$(last)" = "$sha1" ]'
+check "records the installed commit, readable by claw-sync (644)" eval '[ "$(last)" = "$sha1" ] && [ "$(stat -c %a "$T/state/last")" = 644 ]'
 check "deletes the clone afterwards" work_empty
 check "installs itself from the clone" eval 'cmp -s "$T/sbin/claw-install" "$INFRA/claw-install" && says "updated $T/sbin/claw-install"'
 check "first install lists infra/" eval 'says "no previous install recorded" && says "infra/install.sh"'
