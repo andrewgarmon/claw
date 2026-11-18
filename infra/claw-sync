@@ -19,8 +19,8 @@
 #   success when synced + healthy, /fail otherwise. No pings at all = claw-sync or the host is down.
 # - a full run also fails the ping while claw-backup hasn't succeeded in $BACKUP_MAX_AGE (26h), so a
 #   backup job that silently stops running is noticed, not just one that fails
-# - ... and while an OpenClaw extensions dir holds a plugin openclaw.json's plugins.allow doesn't name
-#   (anything at all in the workspace one). Reported, never deleted. claw-sync runs as the agent's
+# - ... and while ~/.openclaw/extensions holds a plugin other than the few installed there on purpose
+#   ($GLOBAL_PLUGINS), or the workspace's extensions dir holds anything. Reported, never deleted. claw-sync runs as the agent's
 #   user, so this is a tripwire for mistakes; plugins.allow and root-owned load paths are the control.
 # - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
 #   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
@@ -36,6 +36,7 @@ FULL_EVERY=${CLAW_SYNC_FULL_EVERY:-300}         # seconds between health checks 
 FETCH_FAIL_RUNS=${CLAW_SYNC_FETCH_FAIL_RUNS:-15} # consecutive fetch failures before /fail (runs are 1 min apart)
 BACKUP_OK=$HOME/.cache/claw-backup/last-ok      # touched by claw-backup on every successful run
 BACKUP_MAX_AGE=${CLAW_SYNC_BACKUP_MAX_AGE:-93600}  # 26h: nightly at ~03:30, plus jitter and slack
+GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected in ~/.openclaw/extensions (claw-smoke has the same list)
 exec 9>"$STATE/lock"; flock -n 9 || exit 0
 cd "$HOME/.openclaw"
 
@@ -59,15 +60,14 @@ backup_stale() {
   [ $(( $(date +%s) - t )) -ge "$BACKUP_MAX_AGE" ] || return 1
   echo "claw-backup hasn't succeeded in $(( ($(date +%s) - t) / 3600 ))h"
 }
-# planted_plugins: prints the plugin dirs nobody asked for: entries of ~/.openclaw/extensions not named in
-# plugins.allow, and every entry of the workspace's .openclaw/extensions (nothing belongs there).
+# planted_plugins: prints the plugin dirs nobody asked for: entries of ~/.openclaw/extensions other
+# than $GLOBAL_PLUGINS (an allowlisted or bundled id there counts too: it could shadow the real one),
+# and every entry of the workspace's .openclaw/extensions (nothing belongs there).
 planted_plugins() {
-  local allow d out=""
-  allow=$(jq -r '.plugins.allow[]?' openclaw.json 2>/dev/null) || { echo "(can't read plugins.allow from openclaw.json)"; return 0; }
-  allow=" $(printf '%s' "$allow" | tr '\n' ' ') "
+  local d out=""
   for d in extensions/* extensions/.[!.]* workspace/.openclaw/extensions/* workspace/.openclaw/extensions/.[!.]*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
-    case $d in extensions/*) [[ $allow == *" ${d#extensions/} "* ]] && continue ;; esac
+    case $d in extensions/*) [[ " $GLOBAL_PLUGINS " == *" ${d#extensions/} "* ]] && continue ;; esac
     out+="$d "
   done
   [ -n "$out" ] || return 1

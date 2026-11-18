@@ -316,7 +316,9 @@ mkdir -p "$O/extensions/evil"; rm -f "$S/last-full"
 run; check "plugin dir not in plugins.allow: fail ping naming it, left in place" \
   eval '[ $rc = 1 ] && pinged /fail "unexpected OpenClaw plugin dirs in ~/.openclaw: extensions/evil" && [ -d "$O/extensions/evil" ]'
 check "tripwire keeps last-full (rechecked every ~5 min, not every minute)" eval '[ -s "$S/last-full" ]'
-rm -rf "$O/extensions/evil"; mkdir -p "$O/workspace/.openclaw/extensions/duckduckgo" "$O/extensions/.hidden"; rm -f "$S/last-full"
+rm -rf "$O/extensions/evil"; mkdir -p "$O/extensions/telegram"; rm -f "$S/last-full"
+run; check "a bundled id in ~/.openclaw/extensions (it could shadow the real one): reported" eval '[ $rc = 1 ] && pinged /fail "extensions/telegram"'
+rm -rf "$O/extensions/telegram"; mkdir -p "$O/workspace/.openclaw/extensions/duckduckgo" "$O/extensions/.hidden"; rm -f "$S/last-full"
 run; check "anything in the workspace extensions dir (even an allowlisted id) and hidden dirs: reported" \
   eval '[ $rc = 1 ] && pinged /fail "extensions/.hidden" && pinged /fail "workspace/.openclaw/extensions/duckduckgo"'
 rm -rf "$O/workspace/.openclaw" "$O/extensions/.hidden"; ln -s /tmp "$O/extensions/linked"; rm -f "$S/last-full"
