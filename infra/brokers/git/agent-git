@@ -10,6 +10,7 @@
 #   agent-git issue-label <repo> <number> <add|remove> <label>
 #   agent-git issue-close <repo> <number>             stdin: closing comment (required)
 #   agent-git issue-reopen <repo> <number>
+#   agent-git pr-comments <repo> <number>             reviews and comments from the owner or the Claude review app; JSON
 # Bodies come on stdin, never argv, so callers can pass them in a single-quoted heredoc
 # (<<'EOF') and the shell can't expand backticks or $ in them. For pr, the body ends at the
 # first line that is exactly "# v2 git bundle" or "# v3 git bundle" (the bundle's own header):
@@ -27,7 +28,10 @@
 # Public repos (GitHub says public, or listed in ~/.config/public-repos): every write verb is
 # coder-only, and before anything is written the text that would go public (PR commits and diffs,
 # branch name, titles, bodies, comments) is checked against ~/.config/redact.txt and gitleaks.
-# A hit is refused and logged without the matched text. Reads stay open to every caller.
+# A hit is refused and logged without the matched text. Reads stay open to every caller, but on a
+# public repo they only return what the owner wrote: issue-list lists the owner's issues, issue-view
+# refuses anyone else's issue and drops other people's comments, and pr-comments (any repo) keeps only
+# the owner and the Claude review app. Anyone can write on a public repo; agents must not read it.
 # new-repo always creates private repos; making one public is the owner's call.
 # Broker: infra/brokers/git (broker.conf, test.sh); helpers in infra/lib/broker.sh.
 set -euo pipefail
@@ -150,6 +154,45 @@ check_texts() {
   while [ $# -ge 2 ]; do printf '%s\n' "$2" > "$SCAN_TMP/scan/$1"; shift 2; done
   leak_check "$repo" "$SCAN_TMP/scan"
 }
+
+# owner_only <mode> <files>...: keep what the repo owner wrote (author_association OWNER) and, for PR
+# reviews and comments, the Claude review app (claude[bot], a Bot). Input files are raw GitHub API
+# output (gh api --paginate, so possibly several JSON arrays back to back). Prints JSON with a
+# "dropped" count. Mode issue: exits 3 if the issue itself isn't the owner's.
+OWNER_ONLY_PY='
+import json, sys
+def items(path):
+    s, i, d, out = open(path, encoding="utf-8").read(), 0, json.JSONDecoder(), []
+    while True:
+        while i < len(s) and s[i].isspace(): i += 1
+        if i >= len(s): return out
+        v, i = d.raw_decode(s, i)
+        out.extend(v if isinstance(v, list) else [v])
+def trusted(x, bot):
+    u = x.get("user") or {}
+    return x.get("author_association") == "OWNER" or (bot and u.get("login") == "claude[bot]" and u.get("type") == "Bot")
+who = lambda x: (x.get("user") or {}).get("login")
+dropped = 0
+def keep(xs, bot, shape):
+    global dropped
+    kept = [shape(x) for x in xs if trusted(x, bot)]
+    dropped += len(xs) - len(kept)
+    return kept
+mode = sys.argv[1]
+if mode == "pr":
+    out = {"reviews": keep(items(sys.argv[2]), True, lambda x: {"author": who(x), "state": x.get("state"), "submittedAt": x.get("submitted_at"), "body": x.get("body") or ""}),
+           "review_comments": keep(items(sys.argv[3]), True, lambda x: {"author": who(x), "path": x.get("path"), "line": x.get("line"), "createdAt": x.get("created_at"), "body": x.get("body") or ""}),
+           "comments": keep(items(sys.argv[4]), True, lambda x: {"author": who(x), "createdAt": x.get("created_at"), "body": x.get("body") or ""})}
+else:
+    [i] = items(sys.argv[2])
+    if not trusted(i, False): sys.exit(3)
+    out = {"number": i.get("number"), "title": i.get("title"), "state": (i.get("state") or "").upper(), "url": i.get("html_url"),
+           "body": i.get("body") or "", "labels": [l.get("name") for l in i.get("labels") or []],
+           "comments": keep(items(sys.argv[3]), False, lambda x: {"author": who(x), "createdAt": x.get("created_at"), "body": x.get("body") or ""})}
+out["dropped"] = dropped
+json.dump(out, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+print()
+'
 
 cmd=${1:-}; shift || true
 case "$cmd" in
@@ -311,10 +354,12 @@ case "$cmd" in
     [ -z "$label" ] || [[ "$label" =~ ^[A-Za-z0-9:._-]{1,50}$ ]] || die "bad label: $label"
     [[ "$state" =~ ^(open|closed|all)$ ]] || die "state must be open, closed or all: $state"
     cd /tmp
-    gh issue list -R "$OWNER/$repo" --state "$state" --limit 100 ${label:+--label="$label"} \
+    repo_visibility "$repo"
+    author=(); [ "$REPO_PUBLIC" = 1 ] && author=(--author "$OWNER")   # public: only the owner's issues
+    gh issue list -R "$OWNER/$repo" --state "$state" --limit 100 ${label:+--label="$label"} "${author[@]}" \
       --json number,title,labels,url --jq '[.[] | {number, title, labels: [.labels[].name], url}]' \
       || die "could not list issues on $repo"
-    log "ISSUE-LIST $repo label=$label state=$state"
+    log "ISSUE-LIST $repo label=$label state=$state${author:+ owner-only}"
     ;;
   issue-view)
     [ $# -ge 2 ] || die "usage: issue-view <repo> <number>"
@@ -322,10 +367,35 @@ case "$cmd" in
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     cd /tmp
-    gh issue view "$n" -R "$OWNER/$repo" --json number,title,state,url,body,labels,comments \
-      --jq '{number, title, state, url, body, labels: [.labels[].name], comments: [.comments[] | {author: .author.login, createdAt, body}]}' \
-      || die "could not view $repo#$n"
-    log "ISSUE-VIEW $repo#$n"
+    repo_visibility "$repo"
+    if [ "$REPO_PUBLIC" = 1 ]; then
+      # public: the owner's issues only, and only the owner's comments on them
+      tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+      gh api "repos/$OWNER/$repo/issues/$n" > "$tmp/issue" || die "could not view $repo#$n"
+      gh api --paginate "repos/$OWNER/$repo/issues/$n/comments?per_page=100" > "$tmp/comments" || die "could not read the comments on $repo#$n"
+      rc=0; python3 -I -c "$OWNER_ONLY_PY" issue "$tmp/issue" "$tmp/comments" || rc=$?
+      [ "$rc" != 3 ] || die "refused: $repo is public and #$n wasn't opened by the owner; issues from anyone else aren't read"
+      [ "$rc" = 0 ] || die "could not read $repo#$n"
+      log "ISSUE-VIEW $repo#$n owner-only"
+    else
+      gh issue view "$n" -R "$OWNER/$repo" --json number,title,state,url,body,labels,comments \
+        --jq '{number, title, state, url, body, labels: [.labels[].name], comments: [.comments[] | {author: .author.login, createdAt, body}]}' \
+        || die "could not view $repo#$n"
+      log "ISSUE-VIEW $repo#$n"
+    fi
+    ;;
+  pr-comments)
+    [ $# -eq 2 ] || die "usage: pr-comments <repo> <number>"
+    repo=${1,,} n=$2
+    valid_repo "$repo" || die "bad repo name: $repo"
+    valid_number "$n"  || die "bad pull request number: $n"
+    cd /tmp
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    gh api --paginate "repos/$OWNER/$repo/pulls/$n/reviews?per_page=100" > "$tmp/reviews" || die "no pull request $repo#$n"
+    gh api --paginate "repos/$OWNER/$repo/pulls/$n/comments?per_page=100" > "$tmp/review-comments" || die "could not read review comments on $repo#$n"
+    gh api --paginate "repos/$OWNER/$repo/issues/$n/comments?per_page=100" > "$tmp/comments" || die "could not read comments on $repo#$n"
+    python3 -I -c "$OWNER_ONLY_PY" pr "$tmp/reviews" "$tmp/review-comments" "$tmp/comments" || die "could not read $repo#$n"
+    log "PR-COMMENTS $repo#$n"
     ;;
   issue-comment)
     [ $# -ge 2 ] || die "usage: issue-comment <repo> <number>  (stdin: comment)"
@@ -397,6 +467,7 @@ usage: agent-git pr <repo> <branch> <title>          stdin: optional body, then 
        agent-git issue-label <repo> <number> <add|remove> <label>
        agent-git issue-close <repo> <number>         stdin: comment (why, link the PR)
        agent-git issue-reopen <repo> <number>
+       agent-git pr-comments <repo> <number>         reviews and comments by the owner or the Claude review app
 bodies go on stdin in a single-quoted heredoc, e.g.
   sudo -u gitbot agent-git issue-comment <repo> <n> <<'EOF'
   text with `backticks` and $vars, kept as-is
@@ -407,6 +478,7 @@ pr: { cat <<'EOF'
   git bundle create - <branch>; } | sudo -u gitbot agent-git pr <repo> <branch> '<title>'
 labels: self-improvement claude-ready agent human-effort:low human-effort:med human-effort:high value:high value:med value:low bug enhancement
 public repos: writes are Claude Code (coder) only and are checked for secrets and personal details first
+public repos: reads return only what the owner wrote (pr-comments: also the Claude review app)
 USAGE
     exit 1 ;;
 esac
