@@ -18,11 +18,12 @@ const sample = {
   github_issue_close: { repo: "claw", number: 7, comment: "Fixed in #8" },
   github_issue_reopen: { repo: "claw", number: 7 },
   sessions_spawn: { runtime: "acp", agentId: "claude", cwd: "/srv/work/claw", task: "Fix the flaky test in infra/tests" },
+  sessions_send: { sessionKey: "agent:main:acp:abc", message: "Also change install.sh" },
 };
 
-test("every write tool and the ACP hand-off is gated; reads never are", () => {
+test("every write tool, the ACP hand-off and sends into other sessions are gated; reads never are", () => {
   const writes = TOOLS.filter((t) => t.write).map((t) => t.name);
-  assert.deepEqual([...writes, "sessions_spawn"].sort(), [...GATED].sort());
+  assert.deepEqual([...writes, "sessions_spawn", "sessions_send"].sort(), [...GATED].sort());
   for (const t of TOOLS.filter((x) => !x.write)) assert.equal(approvalFor(t.name, {}), null, t.name);
   for (const name of ["web_fetch", "message", "read", "write", "memory_search"]) assert.equal(approvalFor(name, {}), null, name);
 });
@@ -77,11 +78,20 @@ test("titles with newlines, markdown, slash commands and bidi tricks are neutral
   assert.match(long.description, /task \(5000 chars\)/);
 });
 
-test("sessions_spawn: only ACP hand-offs are gated", () => {
-  assert.equal(approvalFor("sessions_spawn", { task: "x" }), null);
+test("sessions_spawn fails closed: gated unless it's explicitly an OpenClaw subagent", () => {
   assert.equal(approvalFor("sessions_spawn", { runtime: "subagent", task: "x" }), null);
   assert.ok(approvalFor("sessions_spawn", { runtime: "acp", task: "x" }));
+  assert.ok(approvalFor("sessions_spawn", { task: "x" }), "no runtime: acp.defaultAgent may pick ACP");
+  assert.ok(approvalFor("sessions_spawn", { agentId: "claude", task: "x" }));
+  assert.ok(approvalFor("sessions_spawn", { runtime: "ACP", task: "x" }));
   assert.match(approvalFor("sessions_spawn", { runtime: "acp", task: "x" }).description, /^Start the default ACP agent · /);
+});
+
+test("sessions_send is gated: an approved Claude Code session can't get new tasks without a card", () => {
+  const r = approvalFor("sessions_send", sample.sessions_send);
+  assert.deepEqual(r.allowedDecisions, ["allow-once", "deny"]);
+  assert.equal(r.description, "Send to agent:main:acp:abc (22 chars): “Also change install.sh”");
+  assert.match(approvalFor("sessions_send", { agentId: "x", message: "m" }).description, /^Send to agent x /);
 });
 
 test("message: replies pass; explicit targets other than the owner's DM are blocked", () => {
@@ -94,6 +104,19 @@ test("message: replies pass; explicit targets other than the owner's DM are bloc
   assert.match(messageBlock({ action: "send", channel: "discord", target: "12345" }, "12345"), /not to discord/);
   assert.match(messageBlock({ action: "send", target: "12345" }, undefined), /owner's Telegram DM/);
   assert.match(messageBlock({ action: "send", target: "12345" }, "0 OR 1"), /owner's Telegram DM/);
+});
+
+test("message fails closed on destination shapes it doesn't expect", () => {
+  assert.match(messageBlock({ action: "broadcast", targets: ["12345"] }, "12345"), /broadcasts/);
+  assert.match(messageBlock({ action: "send", targets: ["12345", "@someone"] }, "12345"), /owner's Telegram DM/);
+  assert.equal(messageBlock({ action: "send", targets: ["12345", "telegram:12345"] }, "12345"), null);
+  assert.equal(messageBlock({ action: "send", to: 12345 }, "12345"), null);
+  assert.match(messageBlock({ action: "send", recipients: ["99"] }, "12345"), /owner's Telegram DM/);
+  assert.match(messageBlock({ action: "send", chatId: "-100200" }, "12345"), /owner's Telegram DM/);
+  assert.match(messageBlock({ action: "send", accountId: "other" }, "12345"), /accountId not allowed/);
+  assert.match(messageBlock({ action: "send", groupId: "g" }, "12345"), /groupId not allowed/);
+  assert.match(messageBlock({ action: "send", target: { id: "12345" } }, "12345"), /owner's Telegram DM/);
+  assert.equal(messageBlock({ action: "react", emoji: "👍", messageId: "5", threadId: "7" }, "12345"), null);
 });
 
 test("web_fetch logging keeps only the host", () => {
