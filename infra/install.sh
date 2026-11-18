@@ -32,7 +32,10 @@ id openclaw >/dev/null 2>&1 || { echo "create the openclaw user and install Open
 
 # --- brokers (infra/brokers/<name>/: a user holding one secret, a fixed set of verbs via sudo).
 # agent-git (gitbot) is one. Parse and check every broker.conf before changing anything.
-unset BROKER_ROOT
+# Root never writes under a service user's home: see lib/service-home.sh.
+unset BROKER_ROOT CLAW_ROOT
+# shellcheck source=lib/service-home.sh
+. lib/service-home.sh
 # shellcheck source=lib/broker-install.sh
 . lib/broker-install.sh
 brokers_check brokers/*/ || { echo "install.sh: $B_ERR" >&2; exit 1; }
@@ -47,14 +50,13 @@ install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
 install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
 install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
 # claw-sync alerts when claw-backup's last-ok is over 26h old; a new host gets 26h before the first
-# nightly run. Created as openclaw, so root never writes into the agent's home.
+# nightly run. Created as openclaw: root never writes under a service user's home.
 (cd / && sudo -u openclaw sh -c '[ -e "$1/last-ok" ] || { mkdir -p "$1" && touch "$1/last-ok"; }' _ /home/openclaw/.cache/claw-backup)
 install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
 
 # --- Claude Code as coder (ACP target)
 id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
 install -d -m 755 -o coder -g coder /srv/work
-install -d -m 700 -o coder -g coder /home/coder/.config /home/coder/.claude
 install -m 755 -o root -g root coder-acp claude-usage /usr/local/bin/
 install -m 644 -o root -g root claude-usage.mjs /usr/local/lib/claw/
 # the ACP adapter coder-acp runs: exact versions from acp/package-lock.json, installed root-owned
@@ -76,23 +78,22 @@ if ! cmp -s acp/package-lock.json "$ACP/package-lock.json" || [ ! -x "$ACP/node_
 fi
 visudo -cf coder.sudoers
 install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
-install -m 644 -o coder -g coder coder-CLAUDE.md /home/coder/.claude/CLAUDE.md
+coder_home_install   # ~coder/.config and ~/.claude (as coder), /etc/claude-code/CLAUDE.md
 # coder's commit identity: agent-git checks author/committer against redact.txt for public repos
 sudo -H -u coder git -C /home/coder config --global user.name 'Claude Code'  # -C: coder can't stat root's cwd
 sudo -H -u coder git -C /home/coder config --global user.email claude@claw.invalid
 
-# --- gateway systemd drop-ins (heap size, compile cache)
-D=/home/openclaw/.config/systemd/user/openclaw-gateway.service.d
-install -d -m 755 -o openclaw -g openclaw "$D"
-install -m 644 -o openclaw -g openclaw gateway-dropins/*.conf "$D/"
+# --- gateway systemd drop-ins (heap size, compile cache), root-owned in /etc/systemd/user/
+gateway_dropins_install
 
 systemctl daemon-reload
 systemctl enable --now claw-sync.timer claw-backup.timer
 
-[ -s /home/coder/.config/coder.env ]   || echo "TODO: coder read-only GitHub token (README: secrets)"
-grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
-grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
-[ -x /home/coder/.local/bin/claude ]   || echo "TODO: install + log in Claude Code as coder (README)"
+# (checked as each user, like everything else in their homes)
+as_user coder test -s /home/coder/.config/coder.env || echo "TODO: coder read-only GitHub token (README: secrets)"
+as_user openclaw grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
+as_user openclaw grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
+as_user coder test -x /home/coder/.local/bin/claude || echo "TODO: install + log in Claude Code as coder (README)"
 cmp -s acp/package-lock.json "$ACP/package-lock.json" && [ -x "$ACP/node_modules/.bin/claude-agent-acp" ] \
   || echo "TODO: the pinned ACP adapter isn't installed (needs Node/npm; README: Claude Code). Re-run: sudo claw-install"
-echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload"
+echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload, then restart the gateway"

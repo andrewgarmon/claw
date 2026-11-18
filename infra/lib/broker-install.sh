@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Installs brokers from infra/brokers/<name>/. Sourced by install.sh (which runs as root, only from
-# claw-install's root-owned clone). See infra/README.md, "Adding a broker".
+# claw-install's root-owned clone), after lib/service-home.sh (as_user). See infra/README.md,
+# "Adding a broker".
 #
 # infra/brokers/<name>/
 #   broker.conf       KEY=value data, parsed (never sourced):
@@ -129,7 +130,9 @@ broker_install() {
   else
     adduser --system --group --home "/home/$B_USER" --shell /usr/sbin/nologin "$B_USER"
   fi
-  install -d -m 700 -o "$B_USER" -g "$B_USER" "$home/.config"
+  # as the user: root never writes under a service user's home (lib/service-home.sh)
+  as_user "$B_USER" install -d -m 700 "$home/.config" \
+    || { echo "install.sh: $B_NAME: couldn't create /home/$B_USER/.config as $B_USER" >&2; return 1; }
 
   for p in $B_DEPS ${B_PYREQS:+python3-venv}; do
     dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || apt-get install -y "$p"
@@ -159,7 +162,7 @@ broker_install() {
   install -m 440 -o root -g root "$tmp" "$R/etc/sudoers.d/agent-$B_NAME"
   rm -f "$tmp"
 
-  [ -s "$home/.config/$B_SECRET" ] \
+  as_user "$B_USER" test -s "$home/.config/$B_SECRET" \
     || echo "TODO: $B_USER secret /home/$B_USER/.config/$B_SECRET (infra/README.md: secrets)"
 }
 

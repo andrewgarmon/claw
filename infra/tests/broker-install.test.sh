@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2034  # rc and L are read inside eval'd check strings
-# Tests for broker_install (infra/lib/broker-install.sh) with fake adduser/id/getent/install/
+# Tests for broker_install (infra/lib/broker-install.sh) with fake adduser/id/getent/install/sudo/
 # dpkg-query/apt-get/python3, writing under a scratch root (BROKER_ROOT). Checks that the git
-# broker installs gitbot exactly as the old hand-written install.sh lines did.
+# broker installs gitbot exactly as the old hand-written install.sh lines did, except that the
+# config dir in its home is created as gitbot (root never writes under a service user's home).
 # Touches nothing outside a temp dir. Usage: bash infra/tests/broker-install.test.sh
 set -uo pipefail
 INFRA=$(cd "$(dirname "$0")/.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+T=$(realpath "$T")
 BIN=$T/bin R=$T/root
 mkdir -p "$BIN" "$T/users" "$T/pkgs"
 export BROKER_ROOT=$R
+# shellcheck source=../lib/service-home.sh
+. "$INFRA/lib/service-home.sh"
 # shellcheck source=../lib/broker-install.sh
 . "$INFRA/lib/broker-install.sh"
 
@@ -19,7 +23,7 @@ LOGCALL='printf "%s" "$(basename "$0")" >> '"$T/calls"'; printf "[%s]" "$@" >> '
 fake id       "if [ \"\$1\" = -Gn ]; then IFS=: read -r _ _ _ g < $T/users/\$2; echo \"\${g:-\$2}\"; else [ -e $T/users/\$1 ]; fi"
 # users/<name> holds "uid:home:shell[:groups]"
 fake getent   "[ -e $T/users/\$2 ] && IFS=: read -r u h s _ < $T/users/\$2 && echo \"\$2:x:\$u:\$u::\$h:\$s\""
-fake adduser  "$LOGCALL; echo 999:/home/\${!#}:/usr/sbin/nologin > $T/users/\${!#}"
+fake adduser  "$LOGCALL; echo 999:/home/\${!#}:/usr/sbin/nologin > $T/users/\${!#}; mkdir -p $R/home/\${!#}"
 fake dpkg-query "[ -e $T/pkgs/\${!#} ] && echo 'install ok installed'"
 fake apt-get  "$LOGCALL"
 fake visudo   "$LOGCALL; [ -x /usr/sbin/visudo ] && exec /usr/sbin/visudo \"\$@\"; exit 0"
@@ -28,6 +32,16 @@ fake python3  "$LOGCALL; [ \"\$1 \$2\" = '-m venv' ] && mkdir -p \"\$3/bin\" && 
 fake install  "$LOGCALL"'
 a=(); while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) a+=("$1"); shift ;; esac; done
 exec /usr/bin/install "${a[@]}"'
+# sudo -n -u <user> -- <cmd>...: log, refuse any absolute path outside $R/home/<user> once symlinks
+# are resolved (all a real service user could change), then run <cmd> with the real tools
+fake sudo "$LOGCALL"'
+[ "$1" = -n ] && shift; [ "$1" = -u ] || exit 2; u=$2; shift 2; [ "$1" = -- ] && shift
+for a in "${@:2}"; do
+  case $a in /*) ;; *) continue ;; esac
+  p=$(realpath -m -- "$a")
+  case $p in '"$R"'/home/"$u"|'"$R"'/home/"$u"/*) ;; *) echo "sudo: $u: permission denied: $a" >&2; exit 1 ;; esac
+done
+PATH=/usr/bin:/bin exec "$@"'
 PATH=$BIN:$PATH
 
 fails=0
@@ -46,7 +60,9 @@ fresh
 run "$INFRA/brokers/git"
 check "gitbot created as before: system user, own group, /home/gitbot, nologin" \
   eval '[ $rc = 0 ] && called "adduser[--system][--group][--home][/home/gitbot][--shell][/usr/sbin/nologin][gitbot]"'
-check "gitbot config dir 700 as before" called "install[-d][-m][700][-o][gitbot][-g][gitbot][$R/home/gitbot/.config]"
+check "gitbot config dir 700, created as gitbot" \
+  eval 'called "sudo[-n][-u][gitbot][--][install][-d][-m][700][$R/home/gitbot/.config]" && [ "$(stat -c %a "$R/home/gitbot/.config")" = 700 ]'
+check "root never names a path under gitbot's home" eval '! grep -v "^sudo\[" "$T/calls" | grep -qF "$R/home/"' 
 check "gh installed when missing" called "apt-get[install][-y][gh]"
 check "gitleaks installed when missing" called "apt-get[install][-y][gitleaks]"
 check "agent-git installed root:root 755 to /usr/local/bin" \
@@ -77,6 +93,25 @@ fresh; echo "104:/home/gitbot:/usr/sbin/nologin:gitbot adm" > "$T/users/gitbot"
 run "$INFRA/brokers/git"
 check "existing account in other groups (syslog-style, in adm): refused" \
   eval '[ $rc = 1 ] && says "is in other groups (gitbot adm)" && [ "$(calls_to install)" = 0 ]'
+
+# ---------- a symlink where the config dir goes: the target (root's) is left alone ----------
+for p in .config .config/gh-token; do
+  fresh; echo 999:/home/gitbot:/usr/sbin/nologin > "$T/users/gitbot"; touch "$T/pkgs/gh" "$T/pkgs/gitleaks"
+  rm -rf "$T/target"; mkdir -p "$R/home/gitbot/.config" "$T/target"; echo root-file > "$T/target/x"; chmod 755 "$T/target"
+  if [ $p = .config ]; then rmdir "$R/home/gitbot/.config"; ln -s "$T/target" "$R/home/gitbot/.config"
+  else ln -s "$T/target/x" "$R/home/gitbot/.config/gh-token"; fi
+  before=$(stat -c '%a %u %n' "$T/target" "$T/target/x"; sha256sum "$T/target/x")
+  run "$INFRA/brokers/git"
+  check "symlink at ~gitbot/$p: target's owner, mode and contents unchanged" \
+    eval '[ "$(stat -c "%a %u %n" "$T/target" "$T/target/x"; sha256sum "$T/target/x")" = "$before" ]'
+  check "symlink at ~gitbot/$p: root never names a path under gitbot's home" \
+    eval '! grep -v "^sudo\[" "$T/calls" | grep -qF "$R/home/"'
+done
+check "symlink at ~gitbot/.config/gh-token: not taken as the secret (TODO)" says "TODO: gitbot secret"
+fresh; echo 999:/home/gitbot:/usr/sbin/nologin > "$T/users/gitbot"; mkdir -p "$R/home/gitbot"; ln -s "$T/target" "$R/home/gitbot/.config"
+run "$INFRA/brokers/git"
+check "config dir gitbot can't create: refused before deps, wrapper or sudoers" \
+  eval '[ $rc = 1 ] && says "couldn'"'"'t create /home/gitbot/.config as gitbot" && [ "$(calls_to install)" = 0 ] && [ "$(calls_to apt-get)" = 0 ] && [ ! -e "$R/etc/sudoers.d/agent-git" ]'
 
 mkdir -p "$T/b/bad"; touch "$T/b/bad/agent-bad" "$T/b/bad/test.sh"
 printf 'USER=root\nCALLERS=openclaw\nSECRET=s\n' > "$T/b/bad/broker.conf"
