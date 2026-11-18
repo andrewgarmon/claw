@@ -1,6 +1,7 @@
 // claw-tools approvals: what the before_tool_call hook in index.js decides for each tool call.
-//   - calendar writes, GitHub issue writes and hand-offs to Claude Code (sessions_spawn) need an
-//     Approve tap: requireApproval with a prompt built from the call's own parameters, never from
+//   - calendar writes, GitHub issue writes, hand-offs to Claude Code (sessions_spawn unless it's
+//     explicitly an OpenClaw subagent) and messages into other sessions (sessions_send: an approved
+//     Claude Code session could otherwise be handed new tasks) need an Approve tap: requireApproval with a prompt built from the call's own parameters, never from
 //     model prose, offering allow-once and deny only, waiting up to 10 minutes;
 //   - message sends to an explicit target other than the owner's Telegram DM are blocked;
 //   - web_fetch is logged (host only), not gated, for now;
@@ -12,7 +13,7 @@ export const DECISIONS = Object.freeze(["allow-once", "deny"]);
 export const GATED = [
   "calendar_create", "calendar_update", "calendar_delete", "calendar_undo",
   "github_issue_create", "github_issue_comment", "github_issue_label", "github_issue_close", "github_issue_reopen",
-  "sessions_spawn",
+  "sessions_spawn", "sessions_send",
 ];
 
 // clean(text, max): one line for an approval card. Control characters and newlines become spaces,
@@ -105,11 +106,18 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
       description = `Reopen ${clean(p.repo, 100)}#${clean(p.number, 10)}`;
       break;
     case "sessions_spawn":
-      // only hand-offs to an external harness (Claude Code over ACP); OpenClaw subagents aren't gated here
-      if (p.runtime !== "acp") return null;
+      // fail closed: everything is treated as a hand-off to an external harness (Claude Code over
+      // ACP, which acp.defaultAgent may pick even without runtime "acp") unless it's explicitly an
+      // OpenClaw subagent
+      if (p.runtime === "subagent") return null;
       title = "Hand a task to Claude Code";
       description = `Start ${clean(p.agentId || "the default ACP agent", 40)}${p.cwd ? ` in ${clean(p.cwd, 80)}` : ""}${p.resumeSessionId ? " (resuming a session)" : ""}`
         + ` · task (${chars(p.task ?? "")}): ${q(p.task, 400)}`;
+      break;
+    case "sessions_send":
+      title = "Send a message to another session";
+      description = `Send to ${clean(p.sessionKey || p.label || (p.agentId ? `agent ${p.agentId}` : "a session"), 80)}`
+        + ` (${chars(p.message ?? "")}): ${q(p.message, 400)}`;
       break;
     default:
       return null;
@@ -117,19 +125,26 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
   return { title: clean(title, 80), description: clean(description, 512), severity: "warning", timeoutMs: APPROVAL_TIMEOUT_MS, allowedDecisions: [...DECISIONS] };
 }
 
-// messageBlock(params, ownerId): a reason to block a message send to an explicit target that isn't the
-// owner's Telegram DM (replies in the current chat name no target and pass), else null. With no owner
-// id configured, every explicit target is blocked.
+// Fields that pick who a message goes to. A call that sets none of them (and no channel, group,
+// guild or account) is a reply in the current chat and passes; any target it sets must be the owner.
+const TARGET_KEYS = ["target", "to", "targets", "recipients", "recipient", "chatId", "chat_id", "peer", "peerId", "userId"];
+
+// messageBlock(params, ownerId): a reason to block a message call that would reach anyone but the owner
+// (replies in the current chat name no destination and pass), else null. Fails closed: broadcasts,
+// another channel, another account, a group or guild, and any target that isn't the owner's id are
+// blocked; with no owner id configured, every explicit target is blocked.
 export function messageBlock(params, ownerId) {
   const p = params && typeof params === "object" ? params : {};
-  const target = [p.target, p.to].find((v) => typeof v === "string" && v.trim() !== "");
-  const channel = typeof p.channel === "string" && p.channel.trim() !== "" ? p.channel.trim().toLowerCase() : null;
-  if (!target && !channel) return null;
+  if (typeof p.action === "string" && /broadcast/i.test(p.action)) return "broadcasts aren't allowed";
+  const set = (v) => v !== undefined && v !== null && !(typeof v === "string" && v.trim() === "") && !(Array.isArray(v) && v.length === 0);
+  const channel = set(p.channel) ? String(p.channel).trim().toLowerCase() : null;
   if (channel && channel !== "telegram") return `messages go only to the owner on Telegram, not to ${clean(channel, 30)}`;
-  if (!target) return null;
-  const id = target.trim().replace(/^telegram:/i, "");
-  if (ownerId && /^[0-9]{1,20}$/.test(ownerId) && id === ownerId) return null;
-  return "messages go only to the owner's Telegram DM";
+  for (const k of ["groupId", "guildId", "channelId", "accountId"]) if (set(p[k])) return `messages go only to the owner's Telegram DM (${k} not allowed)`;
+  const targets = TARGET_KEYS.filter((k) => set(p[k])).flatMap((k) => (Array.isArray(p[k]) ? p[k] : [p[k]]));
+  if (targets.length === 0) return null;
+  const owner = typeof ownerId === "string" && /^[0-9]{1,20}$/.test(ownerId) ? ownerId : null;
+  const isOwner = (t) => (typeof t === "string" || typeof t === "number") && owner && String(t).trim().replace(/^telegram:/i, "") === owner;
+  return targets.every(isOwner) ? null : "messages go only to the owner's Telegram DM";
 }
 
 // fetchHost(params): the host part of a web_fetch URL, for the log (never the path or query)

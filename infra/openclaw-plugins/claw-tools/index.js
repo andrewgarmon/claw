@@ -33,6 +33,7 @@ export default definePluginEntry({
 
     // Sends to anyone but the owner's DM have no legitimate use here: blocked, no approval path.
     api.on("before_tool_call", (event) => {
+      if (event.toolName !== "message") return undefined;   // don't rely on the matcher alone
       const why = messageBlock(event.params, process.env.TELEGRAM_ALLOW_FROM);
       if (!why) return undefined;
       log(`claw-tools blocked message ${digest(event.params)}: ${why}`);
@@ -40,7 +41,10 @@ export default definePluginEntry({
     }, { matcher: ["message"], priority: 60 });
 
     // web_fetch is logged (host only) to see what it's used for before deciding whether to gate it.
-    api.on("before_tool_call", (event) => { log(`claw-tools web_fetch host=${fetchHost(event.params)}`); return undefined; },
+    api.on("before_tool_call", (event) => {
+      if (event.toolName === "web_fetch") log(`claw-tools web_fetch host=${fetchHost(event.params)}`);
+      return undefined;
+    },
       { matcher: ["web_fetch"], priority: 10 });
 
     for (const tool of TOOLS) {

@@ -15,7 +15,7 @@ let spawns = 0, lastCmd = null;
 const spawn = (cmd, args, opts) => { spawns++; lastCmd = cmd; return realSpawn(FAKE, args, { ...opts, env: { ...opts.env, T } }); };
 const tool = (name) => TOOLS.find((t) => t.name === name);
 const set = (file, content) => fs.writeFileSync(path.join(T, file), content);
-const reset = () => { for (const f of ["out", "err", "rc", "sleep", "argv", "stdin", "env"]) fs.rmSync(path.join(T, f), { force: true }); };
+const reset = () => { for (const f of ["out", "err", "rc", "sleep", "argv", "stdin", "env", "term", "ignoreterm", "signals"]) fs.rmSync(path.join(T, f), { force: true }); };
 const argv = () => fs.readFileSync(path.join(T, "argv"), "utf8").split("\0").slice(0, -1);
 const stdin = () => fs.readFileSync(path.join(T, "stdin"), "utf8");
 async function call(name, params, out = "{}") {
@@ -137,14 +137,33 @@ test("broker failures: tidy error text, never more than a few lines", async () =
   assert.deepEqual(await callTool(tool("claude_usage"), {}, { spawn }), { ok: false, error: "exit 3" });
 });
 
-test("timeout and cancellation kill the broker", async () => {
-  reset(); set("sleep", "5");
-  let r = await callTool(tool("calendar_changes"), {}, { spawn, timeoutMs: 300 });
-  assert.deepEqual(r, { ok: false, error: "timed out after 0s" });
-  reset(); set("sleep", "5");
+test("timeout and cancellation: SIGTERM first (sudo passes it on), and the call waits for the broker to exit", async () => {
+  reset(); set("sleep", "5"); set("term", "");
+  let t0 = Date.now();
+  let r = await callTool(tool("calendar_changes"), {}, { spawn, timeoutMs: 300, killGraceMs: 2000 });
+  assert.deepEqual(r, { ok: false, error: "timed out after 0s." });
+  assert.equal(fs.readFileSync(path.join(T, "signals"), "utf8").trim(), "TERM");
+  assert.ok(Date.now() - t0 < 1500, "resolved once the broker exited on SIGTERM, not after the grace period");
+  reset(); set("sleep", "5"); set("term", "");
   const ac = new AbortController(); setTimeout(() => ac.abort(), 200);
-  r = await callTool(tool("calendar_changes"), {}, { spawn, signal: ac.signal });
-  assert.deepEqual(r, { ok: false, error: "cancelled" });
+  r = await callTool(tool("calendar_changes"), {}, { spawn, signal: ac.signal, killGraceMs: 2000 });
+  assert.deepEqual(r, { ok: false, error: "cancelled." });
+  assert.equal(fs.readFileSync(path.join(T, "signals"), "utf8").trim(), "TERM");
+});
+
+test("a broker that ignores SIGTERM gets SIGKILL after the grace period", async () => {
+  reset(); set("sleep", "30"); set("ignoreterm", "");
+  const t0 = Date.now();
+  const r = await callTool(tool("calendar_changes"), {}, { spawn, timeoutMs: 200, killGraceMs: 400 });
+  assert.equal(r.ok, false);
+  assert.ok(Date.now() - t0 < 5000, "didn't wait for the 30s sleep");
+});
+
+test("a write that times out says it may still have gone through", async () => {
+  reset(); set("sleep", "5"); set("term", "");
+  const r = await callTool(tool("calendar_delete"), { id: "0123456789" }, { spawn, timeoutMs: 200, killGraceMs: 1000 });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /^timed out after 0s\. The change may still have gone through: check before trying again\.$/);
 });
 
 test("validate covers the schema subset the tools use", () => {

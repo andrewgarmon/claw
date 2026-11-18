@@ -11,6 +11,7 @@ export const AGENT_GIT = "/usr/local/bin/agent-git";
 export const CLAUDE_USAGE = "/usr/local/bin/claude-usage";
 export const TIMEOUT_MS = 90_000;
 export const MAX_OUTPUT = 256 * 1024;   // bytes of broker stdout kept; more is cut and flagged
+export const KILL_GRACE_MS = 3000;      // after SIGTERM, before SIGKILL
 const MAX_ERROR = 600;                  // chars of broker stderr passed back on failure
 
 // agent-git's ISSUE_LABELS (infra/brokers/git/agent-git); the test keeps the two lists equal.
@@ -153,17 +154,29 @@ export function validate(schema, value, path = "arguments") {
   return `${path}: unsupported schema`;
 }
 
-// run(spec, {spawn, signal}): run one broker call. Resolves {code, stdout, stderr, truncated}.
-export function run(spec, { spawn, signal, timeoutMs = TIMEOUT_MS, maxOutput = MAX_OUTPUT }) {
+// run(spec, {spawn, signal}): run one broker call. Resolves {code, stdout, stderr, truncated, stopped}.
+// On a timeout or cancel the broker gets SIGTERM (sudo passes that on to it; a SIGKILL would only
+// stop sudo and leave the broker running), then SIGKILL after a grace period, and the call resolves
+// once it has exited, so a write can't land after the tool has already reported failure.
+export function run(spec, { spawn, signal, timeoutMs = TIMEOUT_MS, maxOutput = MAX_OUTPUT, killGraceMs = KILL_GRACE_MS }) {
   return new Promise((resolve) => {
-    let out = Buffer.alloc(0), err = "", truncated = false, done = false;
+    let out = Buffer.alloc(0), err = "", truncated = false, done = false, stopped = null, hard = null;
     const child = spawn(SUDO, ["-n", "-u", spec.user, spec.cmd, ...spec.args], {
       cwd: "/", env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" }, stdio: ["pipe", "pipe", "pipe"], shell: false,
     });
-    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener?.("abort", onAbort); resolve({ code, stdout: out.toString("utf8"), stderr: err, truncated }); };
-    const kill = () => { try { child.kill("SIGKILL"); } catch { /* already gone */ } };
-    const timer = setTimeout(() => { err = `timed out after ${Math.round(timeoutMs / 1000)}s`; kill(); finish(124); }, timeoutMs);
-    const onAbort = () => { err = "cancelled"; kill(); finish(130); };
+    const finish = (code) => {
+      if (done) return; done = true; clearTimeout(timer); clearTimeout(hard); signal?.removeEventListener?.("abort", onAbort);
+      resolve({ code: stopped ? stopped.code : code, stdout: out.toString("utf8"), stderr: stopped ? stopped.why : err, truncated, stopped: Boolean(stopped) });
+    };
+    const send = (sig) => { try { child.kill(sig); } catch { /* already gone */ } };
+    const stop = (why, code) => {
+      if (stopped || done) return;
+      stopped = { why, code };
+      send("SIGTERM");
+      hard = setTimeout(() => { send("SIGKILL"); setTimeout(() => finish(code), 500); }, killGraceMs);
+    };
+    const timer = setTimeout(() => stop(`timed out after ${Math.round(timeoutMs / 1000)}s`, 124), timeoutMs);
+    const onAbort = () => stop("cancelled", 130);
     signal?.addEventListener?.("abort", onAbort);
     child.stdout.on("data", (d) => {
       if (truncated) return;
@@ -173,6 +186,8 @@ export function run(spec, { spawn, signal, timeoutMs = TIMEOUT_MS, maxOutput = M
     child.stderr.on("data", (d) => { if (err.length < MAX_ERROR * 4) err += d.toString("utf8"); });
     child.on("error", (e) => { err = `could not start: ${e.code || e.message}`; finish(127); });
     child.on("close", (code) => finish(code ?? 1));
+    // once stopped, the process exiting is what matters (a leftover grandchild may hold the pipes)
+    child.on("exit", (code) => { if (stopped) finish(code ?? 1); });
     child.stdin.on("error", () => {});
     child.stdin.end(spec.input ?? "");
   });
@@ -189,6 +204,10 @@ export async function callTool(tool, params, deps) {
   const bad = validate(tool.parameters, p) || (tool.check ? tool.check(p) : null);
   if (bad) return { ok: false, error: `invalid arguments: ${bad}` };
   const r = await run(tool.build(p), deps);
+  if (r.stopped) {
+    const note = tool.write ? " The change may still have gone through: check before trying again." : "";
+    return { ok: false, error: `${r.stderr}.${note}` };
+  }
   if (r.code !== 0) return { ok: false, error: tidy(r.stderr) || `exit ${r.code}` };
   let data = r.stdout.trim();
   if (!r.truncated) { try { data = JSON.parse(data); } catch { /* plain text, e.g. a URL */ } }
