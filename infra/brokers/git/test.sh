@@ -418,6 +418,10 @@ printf '# flipping soon\nsoon-public\n' > "$H/.config/public-repos"
 stdin "x"
 SUDO_USER=openclaw run issue soon-public "t"
 check "listed in public-repos: treated as public even while GitHub says private" eval 'denied "only Claude Code" && ! created'
+printf 'Soon-Public\n' > "$H/.config/public-repos"
+stdin "x"
+SUDO_USER=openclaw run issue soon-public "t"
+check "public-repos is matched case-insensitively (a Mixed-Case entry still counts)" eval 'denied "only Claude Code" && ! created'
 rm "$H/.config/public-repos"
 stdin "x"
 SUDO_USER=coder run issue broken-repo "t"
