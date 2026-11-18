@@ -292,6 +292,17 @@ mkdir -p "$T/dev/workspace" && echo new > "$T/dev/workspace/LATER.md" && git -C 
 echo local > "$O/workspace/LATER.md"
 run; check "a local file the new commit tracks: overwritten by the sync, not reported as removed" \
   eval '[ $rc = 0 ] && [ "$(cat "$O/workspace/LATER.md")" = new ] && ! pinged /fail ""'
+# excludes the agent's user can write don't hide anything: a nested .gitignore, .git/info/exclude,
+# core.excludesFile. Only the committed root .gitignore counts.
+mkdir -p "$O/workspace/skills/evil" "$O/.git/info"
+echo planted > "$O/workspace/skills/evil/SKILL.md"; echo '*' > "$O/workspace/skills/evil/.gitignore"
+echo planted > "$O/workspace/HIDDEN.md"; echo 'workspace/HIDDEN.md' >> "$O/.git/info/exclude"
+echo planted > "$O/workspace/ALSO.md"; echo 'workspace/ALSO.md' > "$T/excludes"; git -C "$O" config core.excludesFile "$T/excludes"
+rm -f "$S/last-full"
+run; check "a planted nested .gitignore, info/exclude or core.excludesFile hides nothing: all removed and named" \
+  eval '[ $rc = 1 ] && pinged /fail "workspace/skills/evil/SKILL.md" && pinged /fail "workspace/HIDDEN.md" && pinged /fail "workspace/ALSO.md" && [ ! -e "$O/workspace/skills/evil" ] && [ ! -e "$O/workspace/HIDDEN.md" ] && [ ! -e "$O/workspace/ALSO.md" ]'
+check "the emptied directory is gone, its tracked parent stays" eval '[ ! -e "$O/workspace/skills/evil" ] && [ -d "$O/workspace" ]'
+git -C "$O" config --unset core.excludesFile; : > "$O/.git/info/exclude"
 for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
 run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
 
