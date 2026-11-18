@@ -59,12 +59,13 @@ backup_stale() {
   echo "claw-backup hasn't succeeded in $(( ($(date +%s) - t) / 3600 ))h"
 }
 # planted_plugins: prints the plugin dirs nobody asked for: entries of ~/.openclaw/extensions not named in
-# plugins.allow, and every entry of the workspace's .openclaw/extensions (nothing belongs there).
+# plugins.allow, and every entry of a workspace's .openclaw/extensions (workspace/, workspace-reader/;
+# nothing belongs there).
 planted_plugins() {
   local allow d out=""
   allow=$(jq -r '.plugins.allow[]?' openclaw.json 2>/dev/null) || { echo "(can't read plugins.allow from openclaw.json)"; return 0; }
   allow=" $(printf '%s' "$allow" | tr '\n' ' ') "
-  for d in extensions/* extensions/.[!.]* workspace/.openclaw/extensions/* workspace/.openclaw/extensions/.[!.]*; do
+  for d in extensions/* extensions/.[!.]* workspace*/.openclaw/extensions/* workspace*/.openclaw/extensions/.[!.]*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
     case $d in extensions/*) [[ $allow == *" ${d#extensions/} "* ]] && continue ;; esac
     out+="$d "

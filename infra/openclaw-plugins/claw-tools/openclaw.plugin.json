@@ -12,6 +12,7 @@
     "tools": [
       "calendar_list_calendars",
       "calendar_events",
+      "calendar_event_details",
       "calendar_create",
       "calendar_update",
       "calendar_delete",

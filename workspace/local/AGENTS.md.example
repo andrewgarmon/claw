@@ -4,7 +4,7 @@ Rules and notes for this install only. Copy this file to `workspace/local/AGENTS
 
 ## Daily briefing
 - The scheduled job is `<cron job name>`, set for <HH:MM> <IANA time zone>.
-- Calendar: today's events come from <calendar_events, a skill>, or "no calendar".
+- Calendar: today's events come from <calendar_events, the reader agent, a skill>, or "no calendar".
 - Extra sections, if any: <section name>, after <section>: <what goes in it>.
 
 ## GitHub issue labels
