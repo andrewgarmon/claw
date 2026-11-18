@@ -276,6 +276,9 @@
       },
       "claw-tools": {
         "enabled": true,
+        "config": {
+          "ownerTelegramId": "${TELEGRAM_ALLOW_FROM}"
+        },
         "hooks": {
           "allowPromptInjection": false
         }

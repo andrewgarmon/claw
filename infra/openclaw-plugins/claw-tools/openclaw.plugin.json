@@ -30,6 +30,13 @@
   },
   "configSchema": {
     "type": "object",
-    "additionalProperties": false
+    "additionalProperties": false,
+    "properties": {
+      "ownerTelegramId": {
+        "type": "string",
+        "maxLength": 40,
+        "description": "The owner's Telegram user id: the only explicit message target allowed (set from ${TELEGRAM_ALLOW_FROM})."
+      }
+    }
   }
 }

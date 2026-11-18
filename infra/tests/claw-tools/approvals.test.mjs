@@ -93,8 +93,28 @@ test("long text: the card says only the start is shown, in the title and before 
     const r = approvalFor(name, params);
     assert.ok(r.title.length <= 80 && r.description.length <= 512, name);
     assert.match(r.title, /\(long text: \d+ chars, start shown\)$/, name);
-    assert.match(r.description, new RegExp(`\\(${hidden.length} chars, only the first ${max} shown\\): “`), name);
+    const shown = Number(r.description.match(new RegExp(`\\(${hidden.length} chars, only the first (\\d+) shown\\): “`))?.[1]);
+    assert.ok(shown >= 40 && shown <= max, `${name}: ${shown}`);
     assert.ok(!r.description.includes("ADDRESS"), name);
+  }
+  // every length, worst-case fixed fields: either the whole text is on the card, or the title and the
+  // notice both say it was cut; and the 512 cap never cuts anything itself (the card ends with ”)
+  const fixed = {
+    github_issue_create: (t) => ({ ...worst, body: t }),
+    github_issue_comment: (t) => ({ repo: "r".repeat(100), number: 1234567, body: t }),
+    github_issue_close: (t) => ({ repo: "r".repeat(100), number: 1234567, comment: t }),
+    sessions_spawn: (t) => ({ agentId: "a".repeat(60), cwd: "/".repeat(100), resumeSessionId: "x", task: t }),
+    sessions_send: (t) => ({ sessionKey: "k".repeat(100), message: t }),
+  };
+  for (const [name, mk] of Object.entries(fixed)) {
+    for (let len = 1; len <= 600; len += 7) {
+      const t = "w".repeat(len - 1) + "Z";
+      const r = approvalFor(name, mk(t));
+      assert.ok(r.description.length <= 512 && r.description.endsWith("”"), `${name} ${len}: cut by the cap`);
+      const whole = r.description.includes(`“${t}”`);
+      const flagged = /only the first \d+ shown/.test(r.description) && /long text/.test(r.title);
+      assert.ok(whole !== flagged, `${name} ${len}: whole=${whole} flagged=${flagged}`);
+    }
   }
   const short = approvalFor("github_issue_comment", { repo: "claw", number: 1, body: "Thanks, fixed." });
   assert.equal(short.title, "Comment on GitHub issue");

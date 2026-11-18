@@ -19,6 +19,9 @@ export default definePluginEntry({
   description: "Typed tools for the calendar and GitHub brokers and Claude usage.",
   register(api) {
     const events = new EventCache();
+    // The owner's Telegram id, from plugin config (openclaw.json substitutes ${TELEGRAM_ALLOW_FROM}
+    // there), else the gateway's environment. Neither set: every explicit message target is blocked.
+    const owner = String(api.pluginConfig?.ownerTelegramId ?? process.env.TELEGRAM_ALLOW_FROM ?? "");
     const log = (m) => { try { api.logger?.info?.(m); } catch { /* logging never breaks a call */ } };
     const digest = (v) => createHash("sha256").update(JSON.stringify(v ?? {})).digest("hex").slice(0, 12);
 
@@ -34,7 +37,7 @@ export default definePluginEntry({
     // Sends to anyone but the owner's DM have no legitimate use here: blocked, no approval path.
     api.on("before_tool_call", (event) => {
       if (event.toolName !== "message") return undefined;   // don't rely on the matcher alone
-      const why = messageBlock(event.params, process.env.TELEGRAM_ALLOW_FROM);
+      const why = messageBlock(event.params, owner);
       if (!why) return undefined;
       log(`claw-tools blocked message ${digest(event.params)}: ${why}`);
       return { block: true, blockReason: why };
