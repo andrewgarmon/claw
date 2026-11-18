@@ -115,6 +115,10 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
         + ` · task (${chars(p.task ?? "")}): ${q(p.task, 400)}`;
       break;
     case "sessions_send":
+      // the read-only reader agent is how the main agent researches; a question to it is not a
+      // hand-off (it can't write, message or spawn), so it needs no card. Exactly agentId "reader",
+      // no session key or label: anything else (an ACP session above all) is gated.
+      if (p.agentId === "reader" && p.sessionKey === undefined && p.label === undefined) return null;
       title = "Send a message to another session";
       description = `Send to ${clean(p.sessionKey || p.label || (p.agentId ? `agent ${p.agentId}` : "a session"), 80)}`
         + ` (${chars(p.message ?? "")}): ${q(p.message, 400)}`;
