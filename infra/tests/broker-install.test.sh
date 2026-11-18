@@ -152,4 +152,20 @@ check "prune: brokers still in git are kept" eval '[ -e "$R/etc/sudoers.d/agent-
 check "prune: files without the generated header (or for another name) are never touched" \
   eval '[ -e "$R/etc/sudoers.d/agent-handmade" ] && [ -e "$R/etc/sudoers.d/agent-mismatch" ]'
 
+# ---------- broker logs: the list claw-denywatch reads, and weekly rotation ----------
+: > "$T/calls"; broker_logs_install "$INFRA/brokers" > "$T/out" 2>&1; rc=$?
+check "broker-logs lists every broker's log" \
+  eval '[ $rc = 0 ] && grep -qx "git /home/gitbot/agent-git.log" "$R/usr/local/lib/claw/broker-logs" && grep -qx "cal /home/calbot/agent-cal.log" "$R/usr/local/lib/claw/broker-logs" && [ "$(stat -c %a "$R/usr/local/lib/claw/broker-logs")" = 644 ]'
+check "logrotate: weekly, keep 8, copytruncate, rotated as the broker user" \
+  eval 'f=$R/etc/logrotate.d/claw-brokers; grep -q "^/home/gitbot/agent-git.log {" "$f" && grep -q "su gitbot gitbot" "$f" && grep -q "rotate 8" "$f" && grep -q copytruncate "$f" && grep -q weekly "$f"'
+if command -v logrotate >/dev/null; then
+  # parse check only (-d: debug, changes nothing); the paths don't exist here (missingok), and the
+  # broker users don't either, so the copy checked says su root root
+  sed 's/^  su [a-z0-9-]* [a-z0-9-]*$/  su root root/' "$R/etc/logrotate.d/claw-brokers" > "$T/lr.conf"
+  logrotate -d -s "$T/lr.state" "$T/lr.conf" > "$T/out" 2>&1; rc=$?
+  check "logrotate -d accepts the generated config" eval '[ $rc = 0 ] && ! grep -qi "error" "$T/out"'
+else
+  echo "     (logrotate not installed: syntax check skipped)"
+fi
+
 echo; [ $fails = 0 ] && echo "all broker-install tests passed" || { echo "$fails failed"; exit 1; }

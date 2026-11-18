@@ -1,0 +1,6 @@
+[Unit]
+Description=Alert on broker refusals (DENY lines in the broker logs)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/claw-denywatch

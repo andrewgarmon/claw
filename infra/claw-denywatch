@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# claw-denywatch: alert on broker refusals. Runs as root from a systemd timer every 15 minutes.
+# Every broker logs a refused call as "<time> caller=<user> DENY <reason>" in its own log. A burst
+# of those is what a confused or prompt-injected agent probing the brokers looks like, so each run
+# reads the lines added since the last run and pings a healthchecks.io check:
+#   - success when there were no new refusals (so the check also notices this timer stopping)
+#   - /fail with the count and the first few lines (control characters stripped, capped) otherwise
+# claw-smoke's own refusal checks are skipped: the two refusals it expects, by the caller it uses,
+# inside a run window claw-smoke recorded (root-owned, so the agent can't fake one).
+# The ping URL is in a root-only file the assistant's user can't read, so it can't ping "all clear".
+# Without that file it still logs to the journal (journalctl -u claw-denywatch) and exits non-zero.
+# Logs rotate weekly with copytruncate (logrotate, installed by install.sh); a log that shrank is
+# read again from the top, after the rest of the rotated copy.
+set -uo pipefail
+export LC_ALL=C PATH=/usr/local/bin:/usr/bin:/bin
+LOGS=/usr/local/lib/claw/broker-logs           # "<broker> <log path>" per line, written by install.sh
+STATE=/var/lib/claw-denywatch                  # per-log read position: "<inode> <offset>"
+URL_FILE=/etc/claw/denywatch.url               # healthchecks.io ping URL, root 600
+SMOKE_WINDOWS=/var/lib/claw-smoke/refusal-windows   # "<start> <end>" epochs, appended by claw-smoke
+MAX_LINES=5 MAX_LEN=200
+
+[ "$(id -u)" = 0 ] || { echo "claw-denywatch: run as root" >&2; exit 1; }
+install -d -m 700 "$STATE"
+
+# expected <line>: true if this DENY line is one of claw-smoke's own checks, inside a recorded run
+expected() {
+  local line=$1 t s e
+  case $line in
+    *" caller=coder DENY only claw-backup (openclaw) pushes state backups ("*" refused for coder)") ;;
+    *" caller=openclaw DENY state backups go to "*" takes nothing else ("*" claude/claw-smoke refused)") ;;
+    *) return 1 ;;
+  esac
+  t=$(date -d "${line%% *}" +%s 2>/dev/null) || return 1
+  [ -r "$SMOKE_WINDOWS" ] || return 1
+  while read -r s e; do
+    [[ $s =~ ^[0-9]+$ && $e =~ ^[0-9]+$ ]] || continue
+    [ "$t" -ge $((s - 5)) ] && [ "$t" -le $((e + 5)) ] && return 0
+  done < <(tail -n 50 "$SMOKE_WINDOWS")
+  return 1
+}
+
+# new_lines <name> <log>: print the lines added since the last run and move the position forward
+new_lines() {
+  local name=$1 log=$2 pos="$STATE/$1.pos" ino size oldino=0 off=0
+  if [ ! -f "$log" ] || [ -L "$log" ]; then
+    # not there yet (a new broker): once it appears, read it from the top
+    [ -e "$pos" ] || echo "0 0" > "$pos"
+    return 0
+  fi
+  ino=$(stat -c %i "$log") size=$(stat -c %s "$log")
+  if [ ! -e "$pos" ]; then   # first run for a log that already exists: start from now, don't replay it
+    printf '%s %s\n' "$ino" "$size" > "$pos"; return 0
+  fi
+  read -r oldino off < "$pos" 2>/dev/null || true
+  [[ $oldino =~ ^[0-9]+$ && $off =~ ^[0-9]+$ ]] || { oldino=0 off=0; }
+  if [ "$ino" != "$oldino" ] || [ "$size" -lt "$off" ]; then
+    # rotated (copytruncate shrinks it; a replaced file has a new inode): finish the rotated copy
+    if [ "$off" -gt 0 ] && [ -f "$log.1" ] && [ ! -L "$log.1" ]; then tail -c +$((off + 1)) "$log.1"; fi
+    off=0
+  fi
+  tail -c +$((off + 1)) "$log" | head -c $((size - off))
+  printf '%s %s\n' "$ino" "$size" > "$pos.new" && mv -f "$pos.new" "$pos"
+}
+
+count=0 sample=""
+if [ -r "$LOGS" ]; then
+  while read -r name log; do
+    [[ $name =~ ^[a-z][a-z0-9-]{0,31}$ && $log == /*/agent-*.log ]] || continue   # root-written list
+    while IFS= read -r line; do
+      [[ $line == *" DENY "* ]] || continue
+      expected "$line" && continue
+      count=$((count + 1))
+      if [ "$count" -le "$MAX_LINES" ]; then
+        line=${line//[[:cntrl:]]/}
+        sample+="$name: ${line:0:$MAX_LEN}"$'\n'
+      fi
+    done < <(new_lines "$name" "$log")
+  done < "$LOGS"
+fi
+
+url=
+if [ -f "$URL_FILE" ] && [ ! -L "$URL_FILE" ]; then url=$(head -n1 "$URL_FILE" | tr -d ' \r\t'); fi
+[[ $url =~ ^https://[A-Za-z0-9./_:-]+$ ]] || url=
+ping() {  # ping [fail] <message>
+  local path=""; [ "$1" = fail ] && { path=/fail; shift; }
+  [ -n "$url" ] || return 0
+  curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$*" "$url$path" || echo "claw-denywatch: ping failed" >&2
+}
+
+if [ "$count" -gt 0 ]; then
+  msg="$count broker refusal(s) on $(hostname) in the last run (agent probing a broker, or a broken caller):
+${sample}See the broker logs (/home/<broker user>/agent-*.log)."
+  echo "$msg" >&2
+  ping fail "$msg"
+  exit 1
+fi
+[ -n "$url" ] || { echo "claw-denywatch: no refusals, but no ping URL in $URL_FILE (infra/README.md: broker refusal alerts)" >&2; exit 1; }
+ping "no broker refusals"
+echo "no broker refusals"
