@@ -19,6 +19,7 @@ CAL_SECRET=/home/calbot/.config/caldav.env
 OC_HOME=/home/openclaw
 CONFIG_REPO=claw-config   # the repo claw-install deploys (see its REPO)
 STATE_REPO=claw-state     # agent-git's STATE_REPO
+SMOKE_WINDOWS=/var/lib/claw-smoke/refusal-windows   # claw-denywatch skips its expected refusals in these
 WAIT=${CLAW_SMOKE_WAIT:-20}   # seconds per command; override only for tests
 
 [ "$(id -u)" = 0 ] || { echo "claw-smoke: run with sudo" >&2; exit 1; }
@@ -102,7 +103,7 @@ check_git_refusals() {
 #    that means the timer just fired, so it counts as scheduled.
 check_timers() {
   local t next state bad=
-  for t in claw-sync.timer claw-backup.timer; do
+  for t in claw-sync.timer claw-backup.timer claw-denywatch.timer; do
     if ! systemctl is-enabled -q "$t" 2>/dev/null || ! systemctl is-active -q "$t" 2>/dev/null; then
       bad="${bad:+$bad; }$t isn't enabled and active"; continue
     fi
@@ -146,6 +147,12 @@ check_cal() {
 check_acp
 check_usage
 check_git_token
+# the refusal checks write DENY lines on purpose: record the window before they run (so a
+# claw-denywatch run in the middle already sees it), ending when they must have finished (two calls
+# of at most WAIT seconds each, plus slack)
+smoke_start=$(date +%s)
+mkdir -p "$(dirname "$SMOKE_WINDOWS")" && echo "$smoke_start $((smoke_start + 2 * WAIT + 30))" >> "$SMOKE_WINDOWS" \
+  && tail -n 50 "$SMOKE_WINDOWS" > "$SMOKE_WINDOWS.new" && mv -f "$SMOKE_WINDOWS.new" "$SMOKE_WINDOWS"
 check_git_refusals
 check_timers
 check_gateway
