@@ -14,7 +14,10 @@ cat > "$T/sudo" <<'EOF'
 printf '%s\0' "$@" > "$T/argv"
 cat > "$T/stdin"
 echo "PATH=$PATH LANG=$LANG HOME=${HOME:-unset}" > "$T/env"
-[ -e "$T/sleep" ] && sleep "$(cat "$T/sleep")"
+# $T/term: record SIGTERM in $T/signals and exit; $T/ignoreterm: ignore it (only SIGKILL stops it)
+[ -e "$T/term" ] && trap 'echo TERM >> "$T/signals"; exit 143' TERM
+[ -e "$T/ignoreterm" ] && trap '' TERM
+[ -e "$T/sleep" ] && { sleep "$(cat "$T/sleep")" & wait $!; }
 [ -e "$T/out" ] && cat "$T/out"
 [ -e "$T/err" ] && cat "$T/err" >&2
 exit "$(cat "$T/rc" 2>/dev/null || echo 0)"
