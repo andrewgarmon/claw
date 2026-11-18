@@ -4,7 +4,7 @@ You run as Linux user `coder` on the owner's server. The owner's assistant start
 ## Getting the code
 - Existing repo: `cd /srv/work && (git -C <repo> fetch -q origin 2>/dev/null || git clone -q https://github.com/andrewgarmon/<repo>.git)`
 - Branch from the default branch: `git -C <repo> checkout -q -B claude/<short-slug> origin/HEAD`
-- New repo, only when the task says so: `sudo -u gitbot agent-git new-repo <name> "<description>"`, then clone it.
+- You can't create repos. If a task needs a new one, stop and say so: the owner creates it on github.com and gives you the name.
 
 ## Publishing (you can't push directly)
 1. Commit your work on `claude/<short-slug>`.

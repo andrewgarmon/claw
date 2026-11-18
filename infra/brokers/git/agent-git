@@ -2,7 +2,6 @@
 # agent-git: the only path from agents on claw to GitHub writes.
 # Runs as gitbot via sudo. Agents never see the token.
 #   agent-git pr <repo> <branch> <title>              stdin: optional body, then the branch bundle
-#   agent-git new-repo <name> [description]          also creates the allowlisted issue labels
 #   agent-git issue <repo> <title> [labels]           stdin: body (optional); labels comma-separated, allowlisted
 #   agent-git issue-list <repo> [label] [state]       state open (default), closed or all; JSON
 #   agent-git issue-view <repo> <number>
@@ -32,7 +31,8 @@
 # public repo they only return what the owner wrote: issue-list lists the owner's issues, issue-view
 # refuses anyone else's issue and drops other people's comments, and pr-comments (any repo) keeps only
 # the owner and the Claude review app. Anyone can write on a public repo; agents must not read it.
-# new-repo always creates private repos; making one public is the owner's call.
+# No repo creation: the token has no Administration permission (it could delete repos or make them
+# public). The owner creates repos on github.com; the token covers all repos, new ones included.
 # Broker: infra/brokers/git (broker.conf, test.sh); helpers in infra/lib/broker.sh.
 set -euo pipefail
 umask 077
@@ -313,15 +313,7 @@ case "$cmd" in
     echo "$url"
     ;;
   new-repo)
-    [ $# -ge 1 ] || die "usage: new-repo <name> [description]"
-    name=$1 desc=${2:-}
-    valid_repo "$name" || die "bad repo name: $name"
-    cd /tmp
-    gh repo create "$OWNER/$name" --private --add-readme ${desc:+--description "$desc"} >/dev/null \
-      || die "could not create $OWNER/$name (exists already?)"
-    log "REPO-NEW $name"
-    for l in "${ISSUE_LABELS[@]}"; do ensure_label "$name" "$l"; done
-    echo "https://github.com/$OWNER/$name"
+    die "new-repo was removed: ask the owner to create the repo on github.com (private), then use it by name"
     ;;
   issue)
     [ $# -ge 2 ] || die "usage: issue <repo> <title> [labels]  (stdin: body)"
@@ -459,7 +451,6 @@ case "$cmd" in
   *)
     cat >&2 <<'USAGE'
 usage: agent-git pr <repo> <branch> <title>          stdin: optional body, then the bundle
-       agent-git new-repo <name> [description]
        agent-git issue <repo> <title> [labels]       stdin: body; labels comma-separated
        agent-git issue-list <repo> [label] [state]   state: open (default), closed, all
        agent-git issue-view <repo> <number>
