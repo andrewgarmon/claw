@@ -113,7 +113,7 @@ sudo -iu openclaw bash -c 'umask 077; read -rsp "Bot token: " T; echo; read -rp 
 sudo -iu openclaw openclaw config validate
 sudo -u openclaw XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) systemctl --user restart openclaw-gateway
 ```
-`TELEGRAM_ALLOW_FROM` is the allowlist: messages from anyone else are ignored. Optional: turn on BotFather's Threaded mode so each Telegram thread gets its own session.
+`TELEGRAM_ALLOW_FROM` is the allowlist: messages from anyone else are ignored. Optional: turn on BotFather's Threaded mode so each Telegram thread gets its own session. Each session's context is capped at 200k tokens (`contextTokens` on the Google models; older turns are compacted, after a memory flush), and a session nobody has written in for 4 days resets on its next message (`session.reset` idle mode). The session-memory hook saves its last 50 messages to `memory/` first. Snapshot filenames use `agents.defaults.userTimezone` if you set it (else the host's timezone, often UTC).
 
 **Check:** DM your bot "hi" and get a reply (the first reply can take a minute after a restart).
 

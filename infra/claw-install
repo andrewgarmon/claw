@@ -56,13 +56,17 @@ confirm() {  # confirm <repo> <sha> <last>: show what changed in infra/, ask y/n
     echo "infra/ changes since the last install (${last:0:7}):"
     git -C "$r" --no-pager log --format='  %h %s' "$last..$sha" -- infra/
     git -C "$r" --no-pager diff --stat "$last" "$sha" -- infra/ | sed 's/^/  /'
+    # commit subjects are written by agents; the diff is what root will run, so show all of it first
+    if [ "$YES" != 1 ] && [ -t 0 ]; then
+      git -C "$r" -c color.ui=always diff "$last" "$sha" -- infra/ | page
+    fi
   else
     echo "last installed commit ${last:0:7} isn't in origin/main's history (force push?); review all of infra/"
   fi
   [ "$YES" = 1 ] && return 0
   [ -t 0 ] || die "not a terminal: re-run with -y to install without asking"
   while :; do
-    read -rp "Install ${sha:0:7}? [y]es / [n]o / [d]iff: " ans
+    read -rp "Install ${sha:0:7}? [y]es / [n]o / [d]iff again: " ans
     case "$ans" in
       y|Y|yes) return 0 ;;
       d|D)
