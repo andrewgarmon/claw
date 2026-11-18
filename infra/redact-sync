@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# redact-sync: mirror gitbot's redact.txt into the public repo's PERSONAL_DENYLIST Actions secret,
+# so the CI "no personal words" check uses the same list agent-git checks public pushes against,
+# and redact.txt is the only place to change it.
+# Runs as gitbot from a root-owned systemd timer (hourly). Installed root-owned to
+# /usr/local/lib/claw/redact-sync. Uses its own token (~/.config/redact-sync-token: a fine-grained
+# token for only the public repo, with only Secrets: read and write), so agent-git's token never
+# gets the Secrets permission.
+# - normalises the list exactly as agent-git does (CRs and surrounding spaces stripped, blank lines
+#   and # comments dropped)
+# - an empty or missing list is never pushed (an empty secret would switch the CI check off):
+#   it fails instead, and the unit's OnFailure pings healthchecks.io
+# - uploads only when the list changed since the last upload (a hash in ~/.cache/redact-sync)
+# - never prints or logs an entry: only counts
+set -euo pipefail
+export HOME=/home/gitbot
+export PATH=/usr/local/bin:/usr/bin:/bin LC_ALL=C
+OWNER=andrewgarmon
+REPOS="claw"                                   # repos whose PERSONAL_DENYLIST mirrors redact.txt
+REDACT_FILE=$HOME/.config/redact.txt
+TOKEN_FILE=$HOME/.config/redact-sync-token
+LOG=$HOME/agent-git.log
+STATE=$HOME/.cache/redact-sync
+umask 077
+
+[ "$(id -un)" = gitbot ] || { echo "redact-sync: run as gitbot" >&2; exit 1; }
+log() { printf '%s caller=redact-sync %s\n' "$(date -Is)" "$*" >> "$LOG"; }
+fail() { echo "redact-sync: $*" >&2; log "REDACT-SYNC failed: $*"; exit 1; }
+
+mkdir -p "$STATE"
+list=$(sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$REDACT_FILE" 2>/dev/null | grep -v -e '^$' -e '^#' || true)
+[ -n "$list" ] || fail "redact.txt is empty or missing; secret left unchanged"
+n=$(printf '%s\n' "$list" | wc -l)
+hash=$(printf '%s\n%s\n' "$REPOS" "$list" | sha256sum | cut -d' ' -f1)
+if [ "$hash" = "$(cat "$STATE/hash" 2>/dev/null)" ]; then echo "redact-sync: unchanged ($n entries)"; exit 0; fi
+
+[ -r "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ] || fail "no token in $TOKEN_FILE (infra/README.md: redact.txt)"
+GH_TOKEN=$(head -n1 "$TOKEN_FILE"); export GH_TOKEN
+for r in $REPOS; do
+  printf '%s\n' "$list" | gh secret set PERSONAL_DENYLIST -R "$OWNER/$r" >/dev/null 2>&1 \
+    || fail "gh secret set on $OWNER/$r failed (does $TOKEN_FILE have Secrets: read and write on it?)"
+done
+echo "$hash" > "$STATE/hash.new" && mv -f "$STATE/hash.new" "$STATE/hash"
+log "REDACT-SYNC updated $n entries ($REPOS)"
+echo "redact-sync: updated PERSONAL_DENYLIST ($n entries) on $REPOS"

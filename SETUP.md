@@ -134,6 +134,7 @@ It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the d
 - **coder's token** (the read-only one above): `sudo -H -u coder bash -c 'umask 077; read -rsp "Token: " T && printf "GH_TOKEN=%s\n" "$T" > ~/.config/coder.env'`, then let git use it: `sudo -H -u coder git -C /home/coder config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`
 - **Claude Code** as coder **(human, to log in)**: `sudo -iu coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude'`
 - **gitbot's token (human)**: a second fine-grained token, All repositories, read/write for **Administration, Contents, Issues, Pull requests**, nothing else (especially not Workflows or Secrets). Store it with: `sudo -H -u gitbot bash -c 'umask 077; read -rsp "Token: " T && printf "%s\n" "$T" > ~/.config/gh-token'`
+- **redact-sync's token (human, optional)**: a third fine-grained token, **only your public repo**, only **Secrets: read and write**, so `redact.txt` is mirrored into the CI check's `PERSONAL_DENYLIST` secret. Store it with: `sudo -H -u gitbot bash -c 'umask 077; read -rsp "Token: " T && printf "%s\n" "$T" > ~/.config/redact-sync-token'`. Without it, `claw-redact-sync` fails and pings `/fail` hourly; add the secret by hand and `sudo systemctl disable claw-redact-sync.timer` if you'd rather.
 - **calbot** (optional, iCloud calendar): see Secrets → calbot.
 
 Run `sudo claw-install` again after the secrets are in. It's safe to re-run.

@@ -43,6 +43,10 @@ install -d -m 755 -o root -g root /usr/local/lib/claw /usr/local/lib/claw/broker
 install -m 644 -o root -g root lib/broker.sh /usr/local/lib/claw/broker.sh
 for b in brokers/*/; do broker_install "$b"; done
 broker_prune brokers
+# redact.txt -> the CI secret PERSONAL_DENYLIST, hourly as gitbot; a failed run pings /fail through
+# claw-fail-ping@ (root reads the ping URL; gitbot can't)
+install -m 755 -o root -g root redact-sync fail-ping /usr/local/lib/claw/
+install -m 644 -o root -g root claw-redact-sync.service claw-redact-sync.timer 'claw-fail-ping@.service' /etc/systemd/system/
 
 # --- deploy timer (claw-sync) + nightly state backup (claw-backup)
 command -v curl >/dev/null || apt-get install -y curl   # claw-sync healthchecks pings
@@ -87,13 +91,14 @@ sudo -H -u coder git -C /home/coder config --global user.email claude@claw.inval
 gateway_dropins_install
 
 systemctl daemon-reload
-systemctl enable --now claw-sync.timer claw-backup.timer
+systemctl enable --now claw-sync.timer claw-backup.timer claw-redact-sync.timer
 
 # (checked as each user, like everything else in their homes)
 as_user coder test -s /home/coder/.config/coder.env || echo "TODO: coder read-only GitHub token (README: secrets)"
 as_user openclaw grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
 as_user openclaw grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
 as_user coder test -x /home/coder/.local/bin/claude || echo "TODO: install + log in Claude Code as coder (README)"
+as_user gitbot test -s /home/gitbot/.config/redact-sync-token || echo "TODO: redact-sync's token (public repo only, Secrets: read and write) in /home/gitbot/.config/redact-sync-token (SETUP.md); until then claw-redact-sync fails hourly"
 cmp -s acp/package-lock.json "$ACP/package-lock.json" && [ -x "$ACP/node_modules/.bin/claude-agent-acp" ] \
   || echo "TODO: the pinned ACP adapter isn't installed (needs Node/npm; README: Claude Code). Re-run: sudo claw-install"
 echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload, then restart the gateway"

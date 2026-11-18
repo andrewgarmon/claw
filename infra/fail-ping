@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# fail-ping <unit>: ping HEALTHCHECKS_PING_URL/fail saying <unit> failed. Run as root by
+# claw-fail-ping@.service (OnFailure= of other claw units). Reads the URL from openclaw's .env,
+# parsed, never sourced; no URL configured means nothing to do.
+set -uo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin LC_ALL=C
+ENV_FILE=/home/openclaw/.openclaw/.env
+unit=${1:-unknown}; unit=${unit//[^A-Za-z0-9@._-]/}
+url=
+[ -f "$ENV_FILE" ] && [ ! -L "$ENV_FILE" ] && url=$(sed -n 's/^HEALTHCHECKS_PING_URL=//p' "$ENV_FILE" | tail -n1 | tr -d "\"' \r")
+[[ $url =~ ^https://[A-Za-z0-9./_:-]+$ ]] || { echo "fail-ping: no HEALTHCHECKS_PING_URL; $unit failed on $(hostname)" >&2; exit 0; }
+curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$unit failed on $(hostname): sudo journalctl -u $unit -n 20" "$url/fail" \
+  || echo "fail-ping: ping failed" >&2

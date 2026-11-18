@@ -1,0 +1,10 @@
+[Unit]
+Description=Mirror redact.txt into the PERSONAL_DENYLIST CI secret
+Wants=network-online.target
+After=network-online.target
+OnFailure=claw-fail-ping@%n.service
+
+[Service]
+Type=oneshot
+User=gitbot
+ExecStart=/usr/local/lib/claw/redact-sync

@@ -1,0 +1,8 @@
+[Unit]
+Description=Ping healthchecks.io /fail because %i failed
+# OnFailure= target for claw units whose own user can't read the ping URL (e.g. gitbot's
+# redact-sync). Root reads HEALTHCHECKS_PING_URL from openclaw's .env (parsed, never sourced).
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/claw/fail-ping %i
