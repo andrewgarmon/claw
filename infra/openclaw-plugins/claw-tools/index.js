@@ -19,9 +19,9 @@ export default definePluginEntry({
   description: "Typed tools for the calendar and GitHub brokers and Claude usage.",
   register(api) {
     const events = new EventCache();
-    // The owner's Telegram id, from plugin config (openclaw.json substitutes ${TELEGRAM_ALLOW_FROM}
-    // there), else the gateway's environment. Neither set: every explicit message target is blocked.
-    const owner = String(api.pluginConfig?.ownerTelegramId ?? process.env.TELEGRAM_ALLOW_FROM ?? "");
+    // The owner's Telegram id, only from plugin config (openclaw.json substitutes ${TELEGRAM_ALLOW_FROM}
+    // there). Not set: every explicit message target is blocked.
+    const owner = String(api.pluginConfig?.ownerTelegramId ?? "");
     const log = (m) => { try { api.logger?.info?.(m); } catch { /* logging never breaks a call */ } };
     const digest = (v) => createHash("sha256").update(JSON.stringify(v ?? {})).digest("hex").slice(0, 12);
 
