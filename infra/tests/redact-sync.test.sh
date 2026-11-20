@@ -29,7 +29,7 @@ chmod +x "$BIN"/*
 echo "ghp_testtoken" > "$TOK"; echo "ghp_agentgit" > "$H/.config/gh-token"; echo "ghp_old_gitbot_copy" > "$H/.config/redact-sync-token"
 
 fails=0
-run() { rm -f "$T/gh.args" "$T/gh.stdin"; bash "$RS" > "$T/out" 2>&1; rc=$?; }
+run() { rm -f "$T/gh.args" "$T/gh.stdin"; bash "$RS" "$@" > "$T/out" 2>&1; rc=$?; }
 check() {
   local name=$1; shift
   if "$@"; then echo "ok   $name"; else echo "FAIL $name"; sed 's/^/     out: /' "$T/out"; fails=$((fails + 1)); fi
@@ -73,6 +73,22 @@ touch -d '25 hours ago' "$ST/hash"
 run
 check "unchanged but last upload over a day ago: uploaded again (a deleted secret comes back)" \
   eval '[ $rc = 0 ] && [ -e "$T/gh.args" ] && [ -n "$(find "$ST/hash" -mmin -5)" ]'
+# entries only get added automatically: a list missing one is refused until the owner confirms
+printf 'Alexandra\nSpringfield\n555-0100\nNewword\nExtra\n' > "$H/.config/redact.txt"
+run
+check "an added entry: uploaded, the root-only copy of the list updated (600)" \
+  eval '[ $rc = 0 ] && [ -e "$T/gh.args" ] && grep -qx Extra "$ST/list" && [ "$(stat -c %a "$ST/list")" = 600 ]'
+printf 'zzzz\n' > "$H/.config/redact.txt"
+run
+check "the list swapped for a harmless one: not uploaded, fails naming the count, no entries shown" \
+  eval '[ $rc = 1 ] && [ ! -e "$T/gh.args" ] && grep -q "lost 5 entries" "$T/out" && grep -q -- "--allow-removals" "$T/out" && no_entries && grep -qx Extra "$ST/list"'
+printf 'Alexandra\nSpringfield\n555-0100\nNewword\n' > "$H/.config/redact.txt"
+run
+check "one entry removed: still refused" eval '[ $rc = 1 ] && [ ! -e "$T/gh.args" ] && grep -q "lost 1 entries" "$T/out"'
+run --allow-removals
+check "the owner confirms with --allow-removals: uploaded" eval '[ $rc = 0 ] && [ -e "$T/gh.args" ] && ! grep -qx Extra "$ST/list"'
+run
+check "after confirming: the shorter list is the new baseline" eval '[ $rc = 0 ] && [ ! -e "$T/gh.args" ]'
 echo 1000 > "$T/whoami"
 run
 check "not running as root: refused, nothing read or sent" eval '[ $rc = 1 ] && grep -q "run as root" "$T/out" && [ ! -e "$T/gh.args" ]'
