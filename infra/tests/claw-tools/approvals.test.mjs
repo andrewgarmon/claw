@@ -170,6 +170,46 @@ test("sessions_send to the reader agent needs no card; anything that only looks 
   assert.ok(approvalFor("sessions_send", { agentId: "reader", message: { text: "m" } }));
 });
 
+test("message: an unlisted destination-like key is blocked; the tool's other 2026.11.3 keys pass", () => {
+  for (const k of ["chat", "user", "username", "destination", "channelIds", "roomId", "conversationId", "email", "phone", "cc", "spaceId", "dmId"])
+    assert.ok(messageBlock({ action: "send", message: "hi", [k]: "someone" }, "12345"), k);
+  assert.ok(messageBlock({ action: "send", message: "hi", destination: { to: "x" } }, "12345"));
+  // every other key the 2026.11.3 message tool schema has, set at once: still a reply in the current chat
+  const replyKeys = ["actions", "after", "around", "asDocument", "asVoice", "attachments", "before", "blocks", "caption", "categories",
+    "chartType", "contentType", "description", "effect", "effectId", "emoji", "filename", "forceDocument", "fromMe", "gifPlayback",
+    "headers", "includeArchived", "kind", "limit", "media", "memberId", "memberIdType", "message", "messageId", "message_id", "mimeType",
+    "name", "notify", "options", "pageSize", "pageToken", "placeholder", "pollId", "pollOptionId", "pollOptionIds", "pollOptionIndex",
+    "pollOptionIndexes", "query", "quoteText", "remove", "replyTo", "rows", "segments", "series", "silent", "targetAuthor",
+    "targetAuthorUuid", "threadId", "title", "tone", "trackToolCalls", "track_tool_calls", "type", "voiceId", "voiceProvider", "voiceText",
+    "xLabel", "yLabel"];
+  assert.equal(messageBlock(Object.fromEntries(replyKeys.map((k) => [k, "x"])), "12345"), null);
+});
+
+test("calendar notes and long locations or titles are flagged like other free text", () => {
+  const base = { calendar: "C".repeat(60), title: "T".repeat(200), start: "2026-11-19T15:00:00", end: "2026-11-19T16:00:00", tz: "America/Argentina/ComodRivadavia" };
+  const tail = "SECRET-AFTER-THE-CUT";
+  for (const [tool, extra] of [["calendar_create", {}], ["calendar_update", { id: "0123456789" }]]) {
+    for (const notes of ["short", "n".repeat(300) + tail, "n".repeat(1980) + tail]) {
+      const a = approvalFor(tool, { ...base, ...extra, location: "L".repeat(200) + tail, notes });
+      assert.ok(a.description.length <= 512, `${tool} ${a.description.length}`);
+      assert.ok(a.description.endsWith("…”") || a.description.endsWith("”"), a.description.slice(-20));
+      assert.ok(!a.description.includes(tail), tool);
+      assert.match(a.title, /long text, start shown/);
+      assert.match(a.description, /location(:| →) \(220 chars, only the first 60 shown\)/);
+    }
+    const small = approvalFor(tool, { ...extra, calendar: "Home", title: "Lunch", start: "2026-11-19T12:00", end: "2026-11-19T13:00", notes: "bring cake" });
+    assert.doesNotMatch(small.title, /long text/);
+    assert.match(small.description, /notes(:| →) “bring cake”$/);
+  }
+  assert.match(approvalFor("calendar_update", { id: "x", notes: "" }).description, /notes cleared$/);
+  assert.match(approvalFor("calendar_update", { id: "x" }).description, /: nothing$/);
+});
+
+test("invisible characters never reach a card", () => {
+  const hidden = "a\u2060b\u2061c\u2064d\ufeffe\u180ef\u00adg\u{e0041}\u{e0042}h\u3164i\ufe0fj";
+  assert.equal(clean(hidden, 100), "a b c d e f g h i j");
+});
+
 test("message: replies pass; explicit targets other than the owner's DM are blocked", () => {
   assert.equal(messageBlock({ action: "send", message: "hi" }, "12345"), null);
   assert.equal(messageBlock({ action: "send", target: "12345" }, "12345"), null);

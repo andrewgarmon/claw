@@ -23,7 +23,10 @@ export const GATED = [
 // to do.
 export function clean(text, max) {
   let t = String(text ?? "")
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, " ")
+    // control, format and invisible characters (zero-width, bidi, word joiner and invisible operators,
+    // BOM, Mongolian vowel separator, soft hyphen, Hangul fillers, tag characters): nothing on the
+    // card may be text the owner can't see
+    .replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb\u{e0000}-\u{e007f}\u{e0100}-\u{e01ef}]/gu, " ")
     .replace(/[*`~|<>[\]\\]/g, "")
     .replace(/(^|\s)\/(?=(approve|deny)\b)/gi, "$1∕")   // "/approve x" → "∕approve x": not a command
     .replace(/\s+/g, " ").trim();
@@ -39,6 +42,8 @@ const tooLong = (text, max) => clean(text, Infinity).length > max;
 const sized = (text, max) => (tooLong(text, max)
   ? `(${chars(text)}, only the first ${max} shown): “${clean(text, Infinity).slice(0, max)}…”`
   : `(${chars(text)}): ${q(text, max)}`);
+// fit(text, max): a short field quoted as is; one that doesn't fit is flagged like sized() does
+const fit = (text, max) => (tooLong(text, max) ? sized(text, max) : q(text, max));
 const long = (text, max) => (tooLong(text, max) ? ` (long text: ${chars(text)}, start shown)` : "");
 // room(prefix, cap): how much free text fits after the card's fixed fields (repo, labels, agent, cwd,
 // ...) within its 512 characters, leaving space for the "(N chars, only the first M shown): “…”"
@@ -87,20 +92,41 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
   const p = params && typeof params === "object" ? params : {};
   let title, description;
   switch (toolName) {
-    case "calendar_create":
-      title = "Create calendar event";
-      description = `Create ${q(p.title, 120)} on ${clean(p.calendar, 60)} · ${span(p)}`
-        + (p.location ? ` · location: ${q(p.location, 120)}` : "") + (p.notes ? ` · notes: ${q(p.notes, 120)}` : "");
+    case "calendar_create": {
+      // title and location are shown in full or flagged like any free text; notes (up to 2000 chars)
+      // get whatever room is left, and the card's title says when anything was cut
+      let head = `Create ${fit(p.title ?? "", 100)} on ${clean(p.calendar, 60)} · ${span(p)}`
+        + (p.location ? ` · location: ${fit(p.location, 60)}` : "");
+      const cut = [tooLong(p.title ?? "", 100), !!p.location && tooLong(p.location, 60)];
+      if (p.notes) {
+        head += " · notes: ";
+        const n = room(head, 300);
+        cut.push(tooLong(p.notes, n));
+        head += fit(p.notes, n);
+      }
+      title = `Create calendar event${cut.some(Boolean) ? " (long text, start shown)" : ""}`;
+      description = head;
       break;
+    }
     case "calendar_update": {
-      const changes = [];
-      if (p.title !== undefined) changes.push(`title → ${q(p.title, 120)}`);
+      const changes = [], cut = [];
+      const field = (name, v, max) => { cut.push(tooLong(v, max)); return `${name} → ${fit(v, max)}`; };
+      if (p.title !== undefined) changes.push(field("title", p.title, 100));
       if (p.start !== undefined) changes.push(`start → ${clean(p.start, 30)}`);
       if (p.end !== undefined) changes.push(`end → ${clean(p.end, 30)}`);
-      if (p.location !== undefined) changes.push(p.location === "" ? "location cleared" : `location → ${q(p.location, 100)}`);
-      if (p.notes !== undefined) changes.push(p.notes === "" ? "notes cleared" : `notes → ${q(p.notes, 100)}`);
-      title = "Change calendar event";
-      description = `Change ${cache.describe(String(p.id ?? ""))}: ${changes.join(", ") || "nothing"}${p.tz ? ` (${clean(p.tz, 40)})` : ""}`;
+      if (p.location !== undefined) changes.push(p.location === "" ? "location cleared" : field("location", p.location, 60));
+      let head = `Change ${cache.describe(String(p.id ?? ""))}${p.tz ? ` (${clean(p.tz, 40)})` : ""}: ${changes.join(", ")}`;
+      if (p.notes !== undefined) {
+        if (p.notes === "") head += `${changes.length ? ", " : ""}notes cleared`;
+        else {
+          head += `${changes.length ? ", " : ""}notes → `;
+          const n = room(head, 300);
+          cut.push(tooLong(p.notes, n));
+          head += fit(p.notes, n);
+        }
+      } else if (!changes.length) head += "nothing";
+      title = `Change calendar event${cut.some(Boolean) ? " (long text, start shown)" : ""}`;
+      description = head;
       break;
     }
     case "calendar_delete":
@@ -174,6 +200,11 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
 // Fields that pick who a message goes to. A call that sets none of them (and no channel, group,
 // guild or account) is a reply in the current chat and passes; any target it sets must be the owner.
 const TARGET_KEYS = ["target", "to", "targets", "recipients", "recipient", "chatId", "chat_id", "peer", "peerId", "userId"];
+// parameter names that could pick who a message reaches (matched after TARGET_KEYS and channel)
+// message-tool keys (2026.11.3) that match DEST_KEY but don't pick a recipient: which author's message
+// a reaction is for, in the current chat
+const NOT_DEST = new Set(["targetAuthor", "targetAuthorUuid"]);
+const DEST_KEY = /^(to|cc|bcc)$|target|recipient|destination|chat|channel|account|guild|group|user|peer|room|conversation|contact|email|phone|handle|address|server|team|space|dm/i;
 
 // messageBlock(params, ownerId): a reason to block a message call that would reach anyone but the owner
 // (replies in the current chat name no destination and pass), else null. Fails closed: broadcasts,
@@ -186,6 +217,12 @@ export function messageBlock(params, ownerId) {
   const channel = set(p.channel) ? String(p.channel).trim().toLowerCase() : null;
   if (channel && channel !== "telegram") return `messages go only to the owner on Telegram, not to ${clean(channel, 30)}`;
   for (const k of ["groupId", "guildId", "channelId", "accountId"]) if (set(p[k])) return `messages go only to the owner's Telegram DM (${k} not allowed)`;
+  // Any other parameter whose name looks like a destination (a later OpenClaw or channel plugin may add
+  // one) is blocked too, so an unlisted key can't pass as "a reply in the current chat".
+  for (const k of Object.keys(p)) {
+    if (TARGET_KEYS.includes(k) || NOT_DEST.has(k) || k === "channel" || !set(p[k])) continue;
+    if (DEST_KEY.test(k)) return `messages go only to the owner's Telegram DM (${clean(k, 30)} not allowed)`;
+  }
   const targets = TARGET_KEYS.filter((k) => set(p[k])).flatMap((k) => (Array.isArray(p[k]) ? p[k] : [p[k]]));
   if (targets.length === 0) return null;
   const owner = typeof ownerId === "string" && /^[0-9]{1,20}$/.test(ownerId) ? ownerId : null;

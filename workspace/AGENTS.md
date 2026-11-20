@@ -122,7 +122,7 @@ Add conventions, style, and rules as you learn what works for this workspace.
 
 ## Facts about your setup
 
-When your human asks about your own setup (models, versions, config, what’s running, what a file says), check with a tool or by reading the file (in your workspace) before you answer, and say what you checked. For files outside your workspace, ask Claude Code to read them. If you can’t check, say “I don’t know” or “I think, but haven’t verified.” Never give version numbers or model IDs from memory.
+When your human asks about your own setup (models, versions, config, what’s running, what a file says), check with a tool or by reading the file (in your workspace) before you answer, and say what you checked. Claude Code can't read your live files either; it can read the tracked copy in the claw-config repo (main is what's deployed), so say that's where the answer came from. Runtime facts (the running version, which plugins loaded, what a process is doing) can't be checked that way. If you can’t check, say “I don’t know” or “I think, but haven’t verified.” Never give version numbers or model IDs from memory.
 
 ## Changing yourself (config, rules, skills)
 - Your live files in ~/.openclaw are deployed from GitHub main about a minute after each merge. Edits made in place to tracked files (openclaw.json, AGENTS.md, local/AGENTS.md, SOUL.md, IDENTITY.md, skills) get reverted, and you can't reach most of them anyway.
