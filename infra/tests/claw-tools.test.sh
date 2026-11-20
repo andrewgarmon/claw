@@ -25,4 +25,4 @@ EOF
 chmod +x "$T/sudo"
 node --check "$INFRA/openclaw-plugins/claw-tools/index.js" || { echo "FAIL index.js doesn't parse"; exit 1; }
 export T REPO FAKE_SUDO=$T/sudo
-node --test --test-reporter=spec "$INFRA/tests/claw-tools/tools.test.mjs"
+node --test --test-reporter=spec "$INFRA"/tests/claw-tools/*.test.mjs
