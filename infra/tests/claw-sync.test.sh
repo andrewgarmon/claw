@@ -306,4 +306,35 @@ git -C "$O" config --unset core.excludesFile; : > "$O/.git/info/exclude"
 for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
 run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
 
+# Python bytecode is only ignored under infra/: a .pyc in a skill folder could run in place of its .py
+mkdir -p "$O/skills/extra/__pycache__" "$O/infra/x/__pycache__"
+echo planted > "$O/skills/extra/__pycache__/run.cpython-312.pyc"; echo planted > "$O/skills/extra/run.pyc"
+echo junk > "$O/infra/x/__pycache__/t.cpython-312.pyc"
+run; check "a .pyc outside infra/: removed and named; infra/ bytecode is ignored" \
+  eval '[ $rc = 1 ] && pinged /fail "skills/extra/__pycache__/run.cpython-312.pyc" && pinged /fail "skills/extra/run.pyc" && [ ! -e "$O/skills/extra" ] && [ -e "$O/infra/x/__pycache__/t.cpython-312.pyc" ] && ! pinged /fail "infra/x"'
+
+# assume-unchanged / skip-worktree hide an in-place edit from git diff: still reverted, and the ping says so
+git -C "$O" update-index --assume-unchanged openclaw.json; echo '{"v":"edited"}' > "$O/openclaw.json"
+git -C "$O" update-index --skip-worktree README.md; echo edited > "$O/README.md"
+rm -f "$S/last-full"
+run; check "edits hidden with assume-unchanged/skip-worktree: reverted, flags cleared, fail ping names them" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git.*openclaw.json" && pinged /fail "README.md" && [ "$(cat "$O/openclaw.json")" != "{\"v\":\"edited\"}" ] && [ "$(cat "$O/README.md")" != edited ] && ! git -C "$O" ls-files -v | grep -q "^[a-zS] "'
+run; check "after that: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
+git -C "$O" update-index --assume-unchanged README.md
+run; check "a flag alone (no edit) still counts: not skipped as idle, cleared" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git" && ! git -C "$O" ls-files -v | grep -q "^[a-z] "'
+
+# Broken ignore rules fail closed: nothing is synced or removed, so state is never deleted
+echo planted > "$O/workspace/PLANTED.md"; good_head=$(git -C "$O" rev-parse HEAD)
+git -C "$T/dev" rm -q .gitignore && git -C "$T/dev" commit -qm "no gitignore" && git -C "$T/dev" push -q origin main
+run; check "main without a .gitignore: not synced, nothing removed, fail ping" \
+  eval '[ $rc = 1 ] && head_is $good_head && pinged /fail "has no .gitignore" && [ -e "$O/workspace/PLANTED.md" ] && [ -e "$O/.env" ] && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/agents/s.json" ]'
+cp "$REPO/.gitignore" "$T/dev/.gitignore"; sed -i '/^workspace\/USER.md$/d' "$T/dev/.gitignore"
+git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore drops state" && git -C "$T/dev" push -q origin main
+run; check "main whose .gitignore stops covering state: not synced, nothing removed, fail ping names it" \
+  eval '[ $rc = 1 ] && head_is $good_head && pinged /fail "never be removed (workspace/USER.md )" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/workspace/USER.md" ] && [ -e "$O/workspace/PLANTED.md" ]'
+cp "$REPO/.gitignore" "$T/dev/.gitignore"; git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore back" && git -C "$T/dev" push -q origin main
+run; check "ignore rules fixed: synced, the planted file removed, state kept" \
+  eval '[ $rc = 1 ] && head_is "$(git -C "$T/dev" rev-parse HEAD)" && pinged /fail "untracked files removed: workspace/PLANTED.md" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/.env" ]'
+
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

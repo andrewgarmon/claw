@@ -56,9 +56,10 @@ backup_stale() {
   [ $(( $(date +%s) - t )) -ge "$BACKUP_MAX_AGE" ] || return 1
   echo "claw-backup hasn't succeeded in $(( ($(date +%s) - t) / 3600 ))h"
 }
-ok() {  # success ping, but fail while origin/main is marked bad, untracked files were removed or backups are stale
+ok() {  # success ping, but fail while origin/main is marked bad, files were removed or unhidden, or backups are stale
   local stale
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
+  [ -z "$hidden" ] || die "tracked files were hidden from git (assume-unchanged/skip-worktree), now reverted: $hidden ($*)"
   [ -z "$removed" ] || die "untracked files removed: $removed ($*)"
   if stale=$(backup_stale); then
     # not die: this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute
@@ -77,19 +78,43 @@ healthy() {  # wait up to $1 seconds for the gateway to be active and answering 
   done
 }
 cfg_hash() { sha256sum openclaw.json | cut -d' ' -f1; }
-# untracked [-z]: files git neither tracks nor ignores, judged only by the .gitignore committed at
-# HEAD. Nested .gitignore files, .git/info/exclude and core.excludesFile are not consulted: the
-# agent's user can write all of those, and could use them to hide a planted file.
-# clean_tree: no drift in tracked files, none of those.
-untracked() {
-  local ign rc=0
+# untracked_at <rev> [-z]: files git neither tracks nor ignores, judged only by <rev>'s committed
+# .gitignore. Nested .gitignore files, .git/info/exclude and core.excludesFile are not consulted: the
+# agent's user can write all of those, and could use them to hide a planted file. Fails (status 2) if
+# <rev> has no .gitignore: everything, state included, would count as untracked, so never delete then.
+# untracked [-z]: the same at HEAD.
+untracked_at() {
+  local ign rc=0 rev=$1; shift
   ign=$(mktemp)
-  git show HEAD:.gitignore > "$ign" 2>/dev/null || : > "$ign"
+  git show "$rev:.gitignore" > "$ign" 2>/dev/null || { rm -f "$ign"; echo "no .gitignore at ${rev:0:7}" >&2; return 2; }
   git -c core.excludesFile=/dev/null ls-files --others --exclude-from="$ign" "$@" || rc=$?
   rm -f "$ign"; return "$rc"
 }
-clean_tree() { git diff --quiet HEAD && [ -z "$(untracked)" ]; }
-removed=""   # untracked files this run deleted; ok() turns the success ping into a fail ping
+untracked() { untracked_at HEAD "$@"; }
+# flagged [-z]: tracked files marked assume-unchanged or skip-worktree. git diff doesn't look at those,
+# so the agent's user could set the flag and edit the file in place unseen. They count as drift.
+flagged() {
+  local z=${1:-} e
+  git ls-files -v -z | while IFS= read -r -d '' e; do
+    case ${e:0:1} in [a-z]|S) if [ "$z" = -z ]; then printf '%s\0' "${e:2}"; else printf '%s\n' "${e:2}"; fi ;; esac
+  done
+}
+# clean_tree: no drift in tracked files (hidden or not) and no untracked files
+clean_tree() {
+  local u f
+  git diff --quiet HEAD && f=$(flagged) && [ -z "$f" ] && u=$(untracked) && [ -z "$u" ]
+}
+# protected <path>: never removed, whatever .gitignore says: the agent's state and secrets. One of these
+# showing up as untracked means the committed ignore rules are broken (e.g. a PR dropped a line), so
+# the run changes nothing and fails instead.
+protected() {
+  case $1 in
+    .env|.env.*|agents/*|credentials/*|state-backup/*|workspace/memory/*|workspace/USER.md|workspace/MEMORY.md|workspace/DREAMS.md) return 0 ;;
+  esac
+  return 1
+}
+removed="" hidden=""   # untracked files this run deleted / tracked files it found hidden from git diff;
+                      # ok() turns the success ping into a fail ping for either
 validate() {
   local out
   out=$(openclaw config validate 2>&1) && return 0
@@ -195,10 +220,26 @@ if [ "$before" = "$want" ] && clean_tree; then
   ok "up to date at ${before:0:7}, gateway healthy"
 fi
 
+# Before the tree changes, judge what would be removed by the target's .gitignore. No .gitignore, or
+# state it doesn't ignore, means the committed ignore rules are broken: stop with nothing changed.
+left=$(untracked_at "$want") || die "${want:0:7} has no .gitignore; not syncing (it decides which files are state to keep)"
+keep=""
+while IFS= read -r f; do [ -z "$f" ] || ! protected "$f" || keep+="$f "; done <<< "$left"
+[ -z "$keep" ] || die "not syncing ${want:0:7}: its .gitignore doesn't cover state that must never be removed ($keep). Nothing removed"
+
 cfg_before=$(cfg_hash)
 cfg_new=$(git show "$want:openclaw.json" | sha256sum | cut -d' ' -f1)
 # Mark the deploy pending before the tree changes, so a run killed during validate/restart is resumed.
 [ "$cfg_new" = "$cfg_before" ] || echo "$want" > "$STATE/pending"
+# assume-unchanged/skip-worktree hide edits from git diff and survive a reset: clear them first
+fl=$(flagged)
+if [ -n "$fl" ]; then
+  hidden=$(printf '%s\n' "$fl" | sed -n '1,20p' | tr '\n' ' ')
+  echo "clearing assume-unchanged/skip-worktree on: $hidden" >&2
+  # two calls: given together, update-index applies only the last of the two options
+  flagged -z | xargs -0r git update-index -q --no-assume-unchanged --
+  flagged -z | xargs -0r git update-index -q --no-skip-worktree --
+fi
 [ "$before" = "$want" ] && ! git diff --quiet HEAD && echo "reverting local drift: $(git diff --name-only HEAD | tr '\n' ' ')"
 git checkout -q main 2>/dev/null || true
 git reset -q --hard "$want"
