@@ -93,7 +93,13 @@ sha2=$(git -C "$T/dev" rev-parse HEAD)
 : > "$T/installed"
 run -y
 check "shows infra/ commits and diffstat since the last install" \
-  eval '[ $rc = 0 ] && says "infra/ changes since the last install (${sha1:0:7})" && says "installer: v2" && says "install.sh |" && [ "$(last)" = "$sha2" ] && grep -q "^v2 " "$T/installed"'
+  eval '[ $rc = 0 ] && says "infra/ (and backup.age.pub) changes since the last install (${sha1:0:7})" && says "installer: v2" && says "install.sh |" && [ "$(last)" = "$sha2" ] && grep -q "^v2 " "$T/installed"'
+echo "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" > "$T/dev/backup.age.pub"
+git -C "$T/dev" add -A && git -C "$T/dev" commit -qm "backup key" && git -C "$T/dev" push -q origin main 2>/dev/null
+run -y
+check "a backup.age.pub change (outside infra/, but install.sh installs it) is in the review too" \
+  eval '[ $rc = 0 ] && says "backup key" && says "backup.age.pub |"'
+sha2=$(git -C "$T/dev" rev-parse HEAD)
 
 # ---------- smoke test after the install ----------
 printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"; chmod +x "$T/claw-smoke"
