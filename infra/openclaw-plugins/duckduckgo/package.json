@@ -1,0 +1,8 @@
+{
+  "name": "claw-openclaw-plugin-duckduckgo",
+  "private": true,
+  "description": "DuckDuckGo web search for OpenClaw, pinned. Installed root-owned by claw-install; loaded through plugins.load.paths.",
+  "dependencies": {
+    "@openclaw/duckduckgo-plugin": "2026.11.3"
+  }
+}
