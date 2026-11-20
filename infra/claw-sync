@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # claw-sync: make ~/.openclaw match origin/main. Runs as openclaw from a root-owned systemd timer.
 # - reverts local drift in tracked files and removes untracked files (anything git neither tracks nor
-#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. What counts as
+#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. They're moved to
+#   ~/.cache/claw-sync/removed/<time>/ (kept 30 days), not deleted, so a mistake can be undone. What counts as
 #   ignored comes only from the .gitignore committed at HEAD, so ignored state (.env, USER.md,
 #   memory/, state-backup/, ...) is left alone and a planted .gitignore can't hide anything.
 # - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
@@ -33,6 +34,8 @@ FULL_EVERY=${CLAW_SYNC_FULL_EVERY:-300}         # seconds between health checks 
 FETCH_FAIL_RUNS=${CLAW_SYNC_FETCH_FAIL_RUNS:-15} # consecutive fetch failures before /fail (runs are 1 min apart)
 BACKUP_OK=$HOME/.cache/claw-backup/last-ok      # touched by claw-backup on every successful run
 BACKUP_MAX_AGE=${CLAW_SYNC_BACKUP_MAX_AGE:-93600}  # 26h: nightly at ~03:30, plus jitter and slack
+REMOVED=$STATE/removed                          # untracked files are moved here, not deleted
+REMOVED_DAYS=${CLAW_SYNC_REMOVED_DAYS:-30}      # ... and kept this long
 exec 9>"$STATE/lock"; flock -n 9 || exit 0
 cd "$HOME/.openclaw"
 
@@ -60,7 +63,7 @@ ok() {  # success ping, but fail while origin/main is marked bad, files were rem
   local stale
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
   [ -z "$hidden" ] || die "tracked files were hidden from git (assume-unchanged/skip-worktree), now reverted: $hidden ($*)"
-  [ -z "$removed" ] || die "untracked files removed: $removed ($*)"
+  [ -z "$removed" ] || die "untracked files removed: $removed(moved to $moved_to) ($*)"
   if stale=$(backup_stale); then
     # not die: this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute
     echo "$stale" >&2; hc fail "$stale: sudo journalctl -u claw-backup -n 20 ($*)"
@@ -113,7 +116,7 @@ protected() {
   esac
   return 1
 }
-removed="" hidden=""   # untracked files this run deleted / tracked files it found hidden from git diff;
+removed="" hidden="" moved_to=""   # untracked files this run deleted / tracked files it found hidden from git diff;
                       # ok() turns the success ping into a fail ping for either
 validate() {
   local out
@@ -249,11 +252,17 @@ if [ -n "$left" ]; then
   n=$(printf '%s\n' "$left" | wc -l)
   removed=$(printf '%s\n' "$left" | sed -n '1,20p' | tr '\n' ' ')
   [ "$n" -le 20 ] || removed+="(and $((n - 20)) more)"
-  echo "removing untracked files: $removed" >&2
+  # moved, not deleted, so a file that should have been kept (one never committed, say) can be put
+  # back: $REMOVED/<time>/<its path>, outside ~/.openclaw, so nothing there is loaded. Kept
+  # $REMOVED_DAYS days.
+  mkdir -p "$REMOVED"; moved_to=$(mktemp -d "$REMOVED/$(date +%Y%m%dT%H%M%S).XXXX")
+  echo "removing untracked files (moving them to $moved_to): $removed" >&2
+  find "$REMOVED" -mindepth 1 -maxdepth 1 ! -path "$moved_to" -mtime +"$REMOVED_DAYS" -exec rm -rf -- {} + 2>/dev/null || true
   # exactly those paths (not git clean, which would honour the excludes ignored above); then any
   # directory left empty, up to the first one that isn't
   while IFS= read -r -d '' f; do
-    rm -rf -- "$f"
+    mkdir -p -- "$moved_to/$(dirname -- "${f%/}")"
+    mv -f -- "$f" "$moved_to/${f%/}" 2>/dev/null || rm -rf -- "$f"   # never leave it in place
     d=$(dirname -- "${f%/}")
     while [ "$d" != . ] && rmdir -- "$d" 2>/dev/null; do d=$(dirname -- "$d"); done
   done < <(untracked -z)
