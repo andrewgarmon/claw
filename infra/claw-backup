@@ -49,7 +49,7 @@ g() { gd "$REPO" "$@"; }
 # claw-state's main is GitHub's "Initial commit". History must start from it or GitHub
 # refuses the PR ("no history in common"); openclaw can't read claw-state, so it ships here.
 ROOT_BUNDLE=$HOME/.openclaw/infra/claw-state-root.bundle
-ROOT_SHA=f017bb7e450c199d37694560047656a79901c6b8
+ROOT_SHA=13755bab789b4d562a9fc579c5edbce56491de8e
 if [ ! -d "$REPO/.git" ]; then
   # build in a scratch dir and move it into place, so a failed init is retried next run
   tmp=$REPO.new; rm -rf "$tmp"
