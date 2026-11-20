@@ -47,8 +47,9 @@ const long = (text, max) => (tooLong(text, max) ? ` (long text: ${chars(text)}, 
 const DESC_MAX = 512, WRAP = 56;
 const room = (prefix, cap) => Math.max(40, Math.min(cap, DESC_MAX - clean(prefix, Infinity).length - WRAP));
 
-// Events seen in recent calendar_events results, so a delete or update card can name the event,
-// not just its id. Filled by index.js; the broker still decides which id means which event.
+// Events seen in recent calendar_events results (and the agent's own creates and updates), so a
+// delete or update card can name the event, not just its id. Filled by index.js through learn(); the
+// broker still decides which id means which event.
 export class EventCache {
   constructor(limit = 500) { this.limit = limit; this.map = new Map(); }
   remember(events) {
@@ -59,6 +60,16 @@ export class EventCache {
       this.map.set(e.id, { title: String(e.title ?? ""), start: String(e.start ?? ""), calendar: String(e.calendar ?? "") });
       if (this.map.size > this.limit) this.map.delete(this.map.keys().next().value);
     }
+  }
+  // learn(toolName, params, result): keep the cache current after a successful call. A create or
+  // update returns the event as it now is (so a renamed or just-created event shows its current
+  // title); a delete forgets its id (a later card for it says "not in a recent listing").
+  learn(toolName, params, data) {
+    const ok = data && typeof data === "object" && !Array.isArray(data);
+    if (toolName === "calendar_events") this.remember(data);
+    else if (toolName === "calendar_create" && ok && data.created === true) this.remember([data]);
+    else if (toolName === "calendar_update" && ok && data.updated === true) this.remember([data]);
+    else if (toolName === "calendar_delete" && ok && data.deleted === true) this.map.delete(String(params?.id ?? ""));
   }
   describe(id) {
     const e = this.map.get(id);
