@@ -9,6 +9,7 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export CLAW_SYNC_HOME=$T/home CLAW_SYNC_HEALTH_WAIT=0 CLAW_SYNC_IDLE_WAIT=0
 export CLAW_SYNC_FULL_EVERY=0   # every run is a full run, except in the idle fast-path tests at the end
 export CLAW_SYNC_FETCH_FAIL_RUNS=3   # the default (15) is checked separately at the end
+export CLAW_SYNC_INSTALLED=$T/installed   # claw-install's last installed commit (absent until the infra-pending tests)
 unset HEALTHCHECKS_PING_URL
 H=$CLAW_SYNC_HOME BIN=$H/.npm-global/bin
 mkdir -p "$BIN"
@@ -36,6 +37,7 @@ case "\$1 \$2" in
   "config validate") [ -e "$H/kill_on_validate" ] && kill -9 "\$(ps -o ppid= -p \$PPID)"   # claw-sync, not the \$( ) subshell
     grep -q INVALID "$H/.openclaw/openclaw.json" && { echo "Config needs correction: bad key"; exit 1; }; echo "Config valid" ;;
   "gateway health") echo health >> "$H/health"; [ ! -e "$H/gw_down" ] && ! grep -q CRASH "$H/gw_cfg" ;;
+  "message send") printf '%s\n' "\$*" >> "$H/messages"; [ ! -e "$H/msg_fail" ] ;;
   *) exit 2 ;;
 esac
 EOF
@@ -279,6 +281,8 @@ for f in workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backu
 run; check "untracked files: removed, named in a fail ping, no restart" \
   eval '[ $rc = 1 ] && restarts 0 && pinged /fail "untracked files removed: .*workspace/BOOTSTRAP.md" && pinged /fail "skills/extra/SKILL.md" && pinged /fail "workspace/skills/new/SKILL.md" && grep -q "removing untracked files" "$T/out"'
 check "untracked files are gone" eval '! ls "$O/workspace/BOOTSTRAP.md" "$O/workspace/TOOLS.md" "$O/workspace/skills/new" "$O/skills/extra" 2>/dev/null'
+check "... moved, not deleted: under removed/<time>/ with their paths, named in the ping" \
+  eval 'q=$(ls -d "$S"/removed/*/ | tail -n1) && [ "$(cat "$q/workspace/BOOTSTRAP.md")" = planted ] && [ -e "$q/workspace/skills/new/SKILL.md" ] && [ -e "$q/skills/extra/SKILL.md" ] && pinged /fail "moved to $S/removed/"'
 check "ignored state is kept (.env, USER.md, MEMORY.md, memory/, state-backup/, workspace/.openclaw/, agents/)" \
   eval 'for f in .env workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backup/x workspace/.openclaw/extensions/x/index.ts agents/s.json; do [ -e "$O/$f" ] || exit 1; done'
 rm -rf "$O/workspace/.openclaw"   # kept by git clean, but the plugin tripwire below would report it
@@ -304,8 +308,95 @@ run; check "a planted nested .gitignore, info/exclude or core.excludesFile hides
   eval '[ $rc = 1 ] && pinged /fail "workspace/skills/evil/SKILL.md" && pinged /fail "workspace/HIDDEN.md" && pinged /fail "workspace/ALSO.md" && [ ! -e "$O/workspace/skills/evil" ] && [ ! -e "$O/workspace/HIDDEN.md" ] && [ ! -e "$O/workspace/ALSO.md" ]'
 check "the emptied directory is gone, its tracked parent stays" eval '[ ! -e "$O/workspace/skills/evil" ] && [ -d "$O/workspace" ]'
 git -C "$O" config --unset core.excludesFile; : > "$O/.git/info/exclude"
+mkdir -p "$S/removed/20000101T000000/workspace" && touch -d '40 days ago' "$S/removed/20000101T000000"
 for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
 run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
+check "moved files older than 30 days are pruned on the next removal" eval '[ ! -e "$S/removed/20000101T000000" ]'
+echo x > "$O/workspace/big.md"
+CLAW_SYNC_REMOVED_MAX_MB=0 run
+check "removed/ over its size cap: deleted instead of moved, and the ping says so" \
+  eval '[ $rc = 1 ] && [ ! -e "$O/workspace/big.md" ] && ! ls "$S"/removed/*/workspace/big.md 2>/dev/null && pinged /fail "big.md.*over 0 MB, so these were deleted"'
+mv "$S/removed" "$T/removed.bak"; touch "$S/removed"; echo x > "$O/workspace/blocked.md"
+run; check "removed/ planted as a file: no crash, files deleted instead, the ping says so" \
+  eval '[ $rc = 1 ] && [ ! -e "$O/workspace/blocked.md" ] && pinged /fail "blocked.md.*isn.t a usable directory, so these were deleted" && ! pinged /fail "crashed"'
+rm -f "$S/removed"; mkdir -p "$T/elsewhere"; ln -s "$T/elsewhere" "$S/removed"; echo x > "$O/workspace/linked.md"
+run; check "removed/ planted as a symlink: not followed, files deleted instead" \
+  eval '[ $rc = 1 ] && [ ! -e "$O/workspace/linked.md" ] && [ -z "$(ls -A "$T/elsewhere")" ] && pinged /fail "isn.t a usable directory" && ! pinged /fail "crashed"'
+rm -f "$S/removed"; mv "$T/removed.bak" "$S/removed"
+
+# Python bytecode is only ignored under infra/: a .pyc in a skill folder could run in place of its .py
+mkdir -p "$O/skills/extra/__pycache__" "$O/infra/x/__pycache__"
+echo planted > "$O/skills/extra/__pycache__/run.cpython-312.pyc"; echo planted > "$O/skills/extra/run.pyc"
+echo junk > "$O/infra/x/__pycache__/t.cpython-312.pyc"
+run; check "a .pyc outside infra/: removed and named; infra/ bytecode is ignored" \
+  eval '[ $rc = 1 ] && pinged /fail "skills/extra/__pycache__/run.cpython-312.pyc" && pinged /fail "skills/extra/run.pyc" && [ ! -e "$O/skills/extra" ] && [ -e "$O/infra/x/__pycache__/t.cpython-312.pyc" ] && ! pinged /fail "infra/x"'
+
+# assume-unchanged / skip-worktree hide an in-place edit from git diff: still reverted, and the ping says so
+git -C "$O" update-index --assume-unchanged openclaw.json; echo '{"v":"edited"}' > "$O/openclaw.json"
+git -C "$O" update-index --skip-worktree README.md; echo edited > "$O/README.md"
+rm -f "$S/last-full"
+run; check "edits hidden with assume-unchanged/skip-worktree: reverted, flags cleared, fail ping names them" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git.*openclaw.json" && pinged /fail "README.md" && [ "$(cat "$O/openclaw.json")" != "{\"v\":\"edited\"}" ] && [ "$(cat "$O/README.md")" != edited ] && ! git -C "$O" ls-files -v | grep -q "^[a-zS] "'
+run; check "after that: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
+git -C "$O" update-index --assume-unchanged README.md
+run; check "a flag alone (no edit) still counts: not skipped as idle, cleared" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git" && ! git -C "$O" ls-files -v | grep -q "^[a-z] "'
+
+# Broken ignore rules fail closed: nothing is synced or removed, so state is never deleted
+echo planted > "$O/workspace/PLANTED.md"; good_head=$(git -C "$O" rev-parse HEAD)
+git -C "$T/dev" rm -q .gitignore && git -C "$T/dev" commit -qm "no gitignore" && git -C "$T/dev" push -q origin main
+run; check "main without a .gitignore: not synced, nothing removed, fail ping" \
+  eval '[ $rc = 1 ] && head_is $good_head && pinged /fail "has no .gitignore" && [ -e "$O/workspace/PLANTED.md" ] && [ -e "$O/.env" ] && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/agents/s.json" ]'
+cp "$REPO/.gitignore" "$T/dev/.gitignore"; sed -i '/^workspace\/USER.md$/d' "$T/dev/.gitignore"
+git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore drops state" && git -C "$T/dev" push -q origin main
+run; check "main whose .gitignore stops covering state: not synced, nothing removed, fail ping names it" \
+  eval '[ $rc = 1 ] && head_is $good_head && pinged /fail "never be removed (workspace/USER.md )" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/workspace/USER.md" ] && [ -e "$O/workspace/PLANTED.md" ]'
+cp "$REPO/.gitignore" "$T/dev/.gitignore"; git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore back" && git -C "$T/dev" push -q origin main
+run; check "ignore rules fixed: synced, the planted file removed, state kept" \
+  eval '[ $rc = 1 ] && head_is "$(git -C "$T/dev" rev-parse HEAD)" && pinged /fail "untracked files removed: workspace/PLANTED.md" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/.env" ]'
+
+# Infra installed vs merged: a healthy full run writes infra-pending and tells the owner once per
+# new infra/ commit; never a fail ping, and a failed message is retried.
+P=$S/infra-pending
+export CLAW_SYNC_FULL_EVERY=0   # every run full again
+msgs() { grep -c "^message send " "$H/messages" 2>/dev/null || true; }   # one per send; a message spans lines
+echo 'TELEGRAM_ALLOW_FROM=12345' >> "$H/.openclaw/.env"
+rm -f "$S/infra-notified" "$H/messages"
+run; check "installed commit unknown: noted as unknown, one message, healthy ping" \
+  eval '[ $rc = 0 ] && grep -q "^installed unknown$" "$P" && [ "$(msgs)" = 1 ] && grep -q -- "--target 12345 .*can.t tell which infra/ commit is installed" "$H/messages" && pinged "" "up to date"'
+c30=$(commit '{"v":30}')
+run; check "still unknown at a new commit: no second message" eval '[ $rc = 0 ] && [ "$(msgs)" = 1 ]'
+git -C "$T/dev" rev-parse HEAD > "$T/installed"; mkdir -p "$T/dev/infra"
+c31=$(commit '{"v":31}' infra/thing)
+run; check "infra/ commit after the installed one: infra-pending names it, one message, healthy ping" \
+  eval '[ $rc = 0 ] && head_is $c31 && grep -q "^installed $(cat "$T/installed")$" "$P" && grep -q "^origin/main $c31$" "$P" && grep -q "{\"v\":31}" "$P" && [ "$(msgs)" = 2 ] && grep -q "merged but not installed" "$H/messages" && grep -q "sudo claw-install" "$H/messages" && pinged "" ""'
+run; check "same origin/main: no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 2 ] && [ -s "$P" ]'
+c31b=$(commit '{"v":31.5}')
+run; check "a later merge that doesn't touch infra/: still pending, no second message" \
+  eval '[ $rc = 0 ] && [ "$(msgs)" = 2 ] && grep -q "^origin/main $c31b$" "$P" && [ "$(cat "$S/infra-notified")" = "$c31" ]'
+touch "$H/msg_fail"; c32=$(commit '{"v":32}' infra/thing)
+run; check "message fails: run still healthy, not recorded as told" eval '[ $rc = 0 ] && pinged "" "" && [ "$(cat "$S/infra-notified")" = "$c31" ] && grep -q "Telegram message failed" "$T/out"'
+rm "$H/msg_fail"
+run; check "next full run retries the message" eval '[ $rc = 0 ] && [ "$(cat "$S/infra-notified")" = "$c32" ] && grep -q "{\"v\":32}" "$P"'
+echo "$c32" > "$T/installed"; c33=$(commit '{"v":33}')
+run; check "installed up to date, newer commits don't touch infra/: infra-pending removed, no message" \
+  eval '[ $rc = 0 ] && [ ! -e "$P" ] && [ "$(cat "$S/infra-notified")" = "$c32" ]'
+echo 0123456789012345678901234567890123456789 > "$T/installed"
+run; check "installed commit not on origin/main: unknown" eval '[ $rc = 0 ] && grep -q "^installed unknown$" "$P"'
+chmod 000 "$T/installed"
+run; check "unreadable installed file (an old claw-install wrote it 600): unknown, no crash" eval '[ $rc = 0 ] && grep -q "^installed unknown$" "$P" && pinged "" ""'
+chmod 644 "$T/installed"; echo "$c33" > "$T/installed"; sed -i '/^TELEGRAM_ALLOW_FROM=/d' "$H/.openclaw/.env"; rm -f "$S/infra-notified"
+c34=$(commit '{"v":34}' infra/thing)
+run; check "no TELEGRAM_ALLOW_FROM: infra-pending still written, no message, healthy" eval '[ $rc = 0 ] && [ -s "$P" ] && [ ! -e "$S/infra-notified" ] && pinged "" ""'
+
+# a run that resumes an interrupted deploy reaches ok() before the fetch (no origin/main yet): no check,
+# so no false "unknown" message and infra-pending isn't rewritten without a target
+echo 'TELEGRAM_ALLOW_FROM=12345' >> "$H/.openclaw/.env"; echo "$c34" > "$S/infra-notified"; : > "$H/messages"
+cp "$P" "$T/pending-before"; echo 1 > "$H/kill_on_restart"; c35=$(commit '{"v":35}')
+run; rm "$H/kill_on_restart"
+run; check "resumed deploy: no infra check, no message, infra-pending untouched" \
+  eval '[ $rc = 0 ] && pinged "" "deployed ${c35:0:7}" && [ "$(msgs)" = 0 ] && [ "$(cat "$S/infra-notified")" = "$c34" ] && cmp -s "$P" "$T/pending-before"'
+run; check "next full run: checks again, still no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 0 ] && grep -q "^origin/main $c35$" "$P"'
 
 # Plugin tripwire: a dir in ~/.openclaw/extensions other than $GLOBAL_PLUGINS (acpx, duckduckgo; not
 # plugins.allow), or anything in the workspace's .openclaw/extensions, fails the ping (named, never

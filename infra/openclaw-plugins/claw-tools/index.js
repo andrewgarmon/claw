@@ -58,7 +58,7 @@ export default definePluginEntry({
         parameters: Type.Unsafe(tool.parameters),
         async execute(_toolCallId, params, signal) {
           const r = await callTool(tool, params, { spawn, signal });
-          if (r.ok && tool.name === "calendar_events") events.remember(r.data);
+          if (r.ok) events.learn(tool.name, params, r.data);
           if (!r.ok) return { content: text(`${tool.name} failed: ${r.error}`), details: { ok: false, error: r.error } };
           let out = typeof r.data === "string" ? r.data : JSON.stringify(r.data, null, 2);
           if (r.truncated) out += "\n[output cut at the size limit]";

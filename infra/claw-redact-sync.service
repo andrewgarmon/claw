@@ -1,0 +1,11 @@
+[Unit]
+Description=Mirror redact.txt into the PERSONAL_DENYLIST CI secret
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# root: its token is root-only, so nothing running as gitbot can rewrite the CI secret. It reads
+# redact.txt as gitbot. unit-ping runs after success and failure, reading the root-only ping URL.
+ExecStart=/usr/local/lib/claw/redact-sync
+ExecStopPost=/usr/local/lib/claw/unit-ping %n /etc/claw/redact-sync.url

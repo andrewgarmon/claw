@@ -145,14 +145,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run
-        # Every infra/tests/*.test.sh and infra/brokers/*/test.sh, so adding a test needs no
-        # workflow edit. Each fakes what it needs (origin, gh, systemctl, ...) in a temp dir.
-        run: |
-          shopt -s nullglob
-          fail=0
-          for t in infra/tests/*.test.sh infra/brokers/*/test.sh; do
-            echo "::group::$t"
-            bash "$t" || { echo "::error::$t failed"; fail=1; }
-            echo "::endgroup::"
-          done
-          exit "$fail"
+        # Every infra/tests/*.test.sh and infra/brokers/*/test.sh, in parallel, so adding a test
+        # needs no workflow edit. Each fakes what it needs (origin, gh, systemctl, ...) in a temp dir.
+        run: bash infra/tests/run-all.sh

@@ -21,7 +21,7 @@ git clone https://github.com/andrewgarmon/claw claw-config && cd claw-config
 rm -rf .git && git init -q -b main
 grep -rlI andrewgarmon . | xargs sed -i 's/andrewgarmon/YOU/g'          # GitHub owner in scripts and docs
 cp workspace/local/AGENTS.md.example workspace/local/AGENTS.md          # fill it in now or later
-for t in infra/tests/*.test.sh infra/brokers/*/test.sh; do bash "$t" >/dev/null 2>&1 || echo "FAIL $t"; done   # no output = all pass
+infra/tests/run-all.sh | tail -3                                         # ends with "all passed"
 ```
 Name the repo **`claw-config`** (the rules and scripts assume that name). Create it on GitHub as **private**, then push:
 ```bash
@@ -113,7 +113,7 @@ sudo -iu openclaw bash -c 'umask 077; read -rsp "Bot token: " T; echo; read -rp 
 sudo -iu openclaw openclaw config validate
 sudo -u openclaw XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) systemctl --user restart openclaw-gateway
 ```
-`TELEGRAM_ALLOW_FROM` is the allowlist: messages from anyone else are ignored. Optional: turn on BotFather's Threaded mode so each Telegram thread gets its own session.
+`TELEGRAM_ALLOW_FROM` is the allowlist: messages from anyone else are ignored. Optional: turn on BotFather's Threaded mode so each Telegram thread gets its own session. Each session's context is capped at 200k tokens (`contextTokens` on the Google models; older turns are compacted, after a memory flush), and a session nobody has written in for 4 days resets on its next message (`session.reset` idle mode). The session-memory hook saves its last 50 messages to `memory/` first. Snapshot filenames use `agents.defaults.userTimezone` if you set it (else the host's timezone, often UTC).
 
 **Check:** DM your bot "hi" and get a reply (the first reply can take a minute after a restart).
 
@@ -133,7 +133,8 @@ sudo claw-install
 It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the deploy and backup timers and the gateway drop-ins, then prints a **TODO** for each missing secret. Work through them (exact commands are in `infra/README.md` → Secrets):
 - **coder's token** (the read-only one above): `sudo -H -u coder bash -c 'umask 077; read -rsp "Token: " T && printf "GH_TOKEN=%s\n" "$T" > ~/.config/coder.env'`, then let git use it: `sudo -H -u coder git -C /home/coder config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`
 - **Claude Code** as coder **(human, to log in)**: `sudo -iu coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude'`
-- **gitbot's token (human)**: a second fine-grained token, All repositories, read/write for **Administration, Contents, Issues, Pull requests**, nothing else (especially not Workflows or Secrets). Store it with: `sudo -H -u gitbot bash -c 'umask 077; read -rsp "Token: " T && printf "%s\n" "$T" > ~/.config/gh-token'`
+- **gitbot's token (human)**: a second fine-grained token, All repositories, read/write for **Contents, Issues, Pull requests**, nothing else (not Administration, Workflows, Actions or Secrets). New repos are yours to create on github.com; "All repositories" covers them. Store it with: `sudo -H -u gitbot bash -c 'umask 077; read -rsp "Token: " T && printf "%s\n" "$T" > ~/.config/gh-token'`
+- **redact-sync (human, optional)**: mirrors `redact.txt` into the CI check's `PERSONAL_DENYLIST` secret. It needs a third token and its own healthchecks.io check. It stays off until gitbot has `redact.txt` and the token is in `/etc/claw/redact-sync-token`. Check your list against the repo first: see infra/README.md, "CI secret from redact.txt".
 - **calbot** (optional, iCloud calendar): see Secrets → calbot.
 
 Run `sudo claw-install` again after the secrets are in. It's safe to re-run.

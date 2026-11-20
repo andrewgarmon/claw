@@ -80,6 +80,8 @@ check "root never names a path under a home" eval '! root_in_home'
 # ---------- the drop-ins themselves ----------
 check "heap.conf sets the heap through NODE_OPTIONS" \
   grep -qxF 'Environment=NODE_OPTIONS=--max-old-space-size=2048' gateway-dropins/heap.conf
+check "python.conf: the gateway doesn't write Python bytecode next to skill code (claw-sync would remove it)" \
+  grep -qxF 'Environment=PYTHONDONTWRITEBYTECODE=1' gateway-dropins/python.conf
 check "no drop-in overrides OpenClaw's ExecStart" eval '! grep -q "^ExecStart" gateway-dropins/*.conf'
 
 # ---------- fresh host: nothing old to remove ----------

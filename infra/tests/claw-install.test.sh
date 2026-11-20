@@ -76,7 +76,7 @@ run -y
 check "installs origin/main from a fresh clone, never the tampered checkout" \
   eval '[ $rc = 0 ] && [ "$(wc -l < "$T/installed")" = 1 ] && grep -q "^v1 $T/work/claw-install\.[A-Za-z0-9]*/repo/infra " "$T/installed" && ! grep -q EVIL "$T/installed"'
 check "install.sh runs with umask 022 and gets the commit" eval 'grep -q " 0022 $sha1$" "$T/installed"'
-check "records the installed commit" eval '[ "$(last)" = "$sha1" ]'
+check "records the installed commit, readable by claw-sync (644)" eval '[ "$(last)" = "$sha1" ] && [ "$(stat -c %a "$T/state/last")" = 644 ]'
 check "deletes the clone afterwards" work_empty
 check "installs itself from the clone" eval 'cmp -s "$T/sbin/claw-install" "$INFRA/claw-install" && says "updated $T/sbin/claw-install"'
 check "first install lists infra/" eval 'says "no previous install recorded" && says "infra/install.sh"'
@@ -93,7 +93,13 @@ sha2=$(git -C "$T/dev" rev-parse HEAD)
 : > "$T/installed"
 run -y
 check "shows infra/ commits and diffstat since the last install" \
-  eval '[ $rc = 0 ] && says "infra/ changes since the last install (${sha1:0:7})" && says "installer: v2" && says "install.sh |" && [ "$(last)" = "$sha2" ] && grep -q "^v2 " "$T/installed"'
+  eval '[ $rc = 0 ] && says "infra/ (and backup.age.pub) changes since the last install (${sha1:0:7})" && says "installer: v2" && says "install.sh |" && [ "$(last)" = "$sha2" ] && grep -q "^v2 " "$T/installed"'
+echo "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" > "$T/dev/backup.age.pub"
+git -C "$T/dev" add -A && git -C "$T/dev" commit -qm "backup key" && git -C "$T/dev" push -q origin main 2>/dev/null
+run -y
+check "a backup.age.pub change (outside infra/, but install.sh installs it) is in the review too" \
+  eval '[ $rc = 0 ] && says "backup key" && says "backup.age.pub |"'
+sha2=$(git -C "$T/dev" rev-parse HEAD)
 
 # ---------- smoke test after the install ----------
 printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"; chmod +x "$T/claw-smoke"
@@ -113,6 +119,20 @@ git -C "$T/dev" commit -qam "v3" && git -C "$T/dev" push -q origin main 2>/dev/n
 run
 check "no terminal and no -y: refuses, installs nothing" \
   eval '[ $rc = 1 ] && says "re-run with -y" && [ ! -s "$T/installed" ] && [ "$(last)" = "$sha2" ] && work_empty'
+
+# interactive (a pty from script(1); less replaced by cat): the full infra/ diff comes before the question
+if command -v script >/dev/null; then
+  printf '#!/bin/bash\ncat\n' > "$BIN/less"; chmod +x "$BIN/less"
+  : > "$T/installed"
+  { sleep 2; echo n; } | script -qec "bash $CI" /dev/null > "$T/out" 2>&1; rc=$?
+  diff_at=$(grep -n -m1 "diff --git a/infra/install.sh" "$T/out" | cut -d: -f1)
+  ask_at=$(grep -n -m1 "Install [0-9a-f]*? \[y\]es" "$T/out" | cut -d: -f1)
+  check "interactive: the full infra/ diff is shown before the question; answering n installs nothing" \
+    eval '[ -n "$diff_at" ] && [ -n "$ask_at" ] && [ "$diff_at" -lt "$ask_at" ] && says "echo \"v3 " && says "not installed" && [ ! -s "$T/installed" ] && [ "$(last)" = "$sha2" ]'
+  rm "$BIN/less"
+else
+  echo "skip interactive claw-install test (no script(1))"
+fi
 
 touch "$T/install_fails"
 run -y
