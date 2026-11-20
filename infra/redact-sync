@@ -27,7 +27,7 @@ umask 077
 [ "$(id -u)" = 0 ] || { echo "redact-sync: run as root" >&2; exit 1; }
 fail() { echo "redact-sync: $*" >&2; exit 1; }
 
-mkdir -p -m 700 "$STATE"
+install -d -m 700 "$STATE"   # parents 755, the state dir itself 700
 list=$(cd / && sudo -n -u gitbot cat "$REDACT_FILE" 2>/dev/null \
   | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v -e '^$' -e '^#' || true)
 [ -n "$list" ] || fail "redact.txt is empty or missing; secret left unchanged"
