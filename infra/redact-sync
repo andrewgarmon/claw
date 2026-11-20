@@ -9,8 +9,9 @@
 # - normalises the list exactly as agent-git does (CRs and surrounding spaces stripped, blank lines
 #   and # comments dropped)
 # - an empty or missing list is never pushed (an empty secret would switch the CI check off):
-#   it fails instead, and the unit's OnFailure pings healthchecks.io
-# - uploads only when the list changed since the last upload (a hash in ~/.cache/redact-sync)
+#   it fails instead, and the unit's unit-ping sends /fail to its own healthchecks.io check
+# - uploads when the list changed since the last upload (a hash in ~/.cache/redact-sync), and at least
+#   once a day anyway, so a secret deleted or edited on GitHub (or a recreated repo) is put back
 # - never prints or logs an entry: only counts
 set -euo pipefail
 export HOME=/home/gitbot
@@ -32,7 +33,9 @@ list=$(sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$REDACT_F
 [ -n "$list" ] || fail "redact.txt is empty or missing; secret left unchanged"
 n=$(printf '%s\n' "$list" | wc -l)
 hash=$(printf '%s\n%s\n' "$REPOS" "$list" | sha256sum | cut -d' ' -f1)
-if [ "$hash" = "$(cat "$STATE/hash" 2>/dev/null)" ]; then echo "redact-sync: unchanged ($n entries)"; exit 0; fi
+if [ "$hash" = "$(cat "$STATE/hash" 2>/dev/null)" ] && [ -n "$(find "$STATE/hash" -mmin -1440 2>/dev/null)" ]; then
+  echo "redact-sync: unchanged ($n entries)"; exit 0
+fi
 
 [ -r "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ] || fail "no token in $TOKEN_FILE (infra/README.md: redact.txt)"
 GH_TOKEN=$(head -n1 "$TOKEN_FILE"); export GH_TOKEN

@@ -2,9 +2,10 @@
 Description=Mirror redact.txt into the PERSONAL_DENYLIST CI secret
 Wants=network-online.target
 After=network-online.target
-OnFailure=claw-fail-ping@%n.service
 
 [Service]
 Type=oneshot
 User=gitbot
 ExecStart=/usr/local/lib/claw/redact-sync
+# "+": as root, which can read the root-only ping URL; gitbot can't. Runs after success and failure.
+ExecStopPost=+/usr/local/lib/claw/unit-ping %n /etc/claw/redact-sync.url
