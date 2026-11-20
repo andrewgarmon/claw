@@ -2,6 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "/home/openclaw/.openclaw/workspace",
+      "skipBootstrap": true,
       "models": {
         "google/gemini-4-argon": {},
         "google/gemini-4-hydrogen": {},
@@ -158,7 +159,9 @@
       "presence",
       "heartbeat_respond",
       "plugins",
-      "secrets"
+      "secrets",
+      "skill_workshop",
+      "cron"
     ],
     "web": {
       "search": {
@@ -190,6 +193,11 @@
       },
       "diagnose-gateway": {
         "enabled": false
+      }
+    },
+    "workshop": {
+      "autonomous": {
+        "mode": "off"
       }
     }
   },
