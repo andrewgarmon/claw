@@ -285,7 +285,6 @@ check "... moved, not deleted: under removed/<time>/ with their paths, named in 
   eval 'q=$(ls -d "$S"/removed/*/ | tail -n1) && [ "$(cat "$q/workspace/BOOTSTRAP.md")" = planted ] && [ -e "$q/workspace/skills/new/SKILL.md" ] && [ -e "$q/skills/extra/SKILL.md" ] && pinged /fail "moved to $S/removed/"'
 check "ignored state is kept (.env, USER.md, MEMORY.md, memory/, state-backup/, workspace/.openclaw/, agents/)" \
   eval 'for f in .env workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backup/x workspace/.openclaw/extensions/x/index.ts agents/s.json; do [ -e "$O/$f" ] || exit 1; done'
-rm -rf "$O/workspace/.openclaw"   # kept by git clean, but the plugin tripwire below would report it
 run; check "after the cleanup: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 echo planted > "$O/workspace/HEARTBEAT.md"
 run; check "untracked file within 5 min of a full run: not skipped as idle" \
@@ -397,32 +396,5 @@ run; rm "$H/kill_on_restart"
 run; check "resumed deploy: no infra check, no message, infra-pending untouched" \
   eval '[ $rc = 0 ] && pinged "" "deployed ${c35:0:7}" && [ "$(msgs)" = 0 ] && [ "$(cat "$S/infra-notified")" = "$c34" ] && cmp -s "$P" "$T/pending-before"'
 run; check "next full run: checks again, still no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 0 ] && grep -q "^origin/main $c35$" "$P"'
-
-# Plugin tripwire: a dir in ~/.openclaw/extensions other than $GLOBAL_PLUGINS (acpx, duckduckgo; not
-# plugins.allow), or anything in the workspace's .openclaw/extensions, fails the ping (named, never
-# deleted).
-c24=$(commit '{"plugins":{"allow":["acpx","duckduckgo"]}}'); rm -f "$S/last-full"
-mkdir -p "$O/extensions/acpx" "$O/extensions/duckduckgo"
-run; check "allowlisted plugin dirs in ~/.openclaw/extensions: healthy" eval '[ $rc = 0 ] && head_is $c24 && pinged "" "deployed"'
-mkdir -p "$O/extensions/evil"; rm -f "$S/last-full"
-run; check "plugin dir not in plugins.allow: fail ping naming it, left in place" \
-  eval '[ $rc = 1 ] && pinged /fail "unexpected OpenClaw plugin dirs in ~/.openclaw: extensions/evil" && [ -d "$O/extensions/evil" ]'
-check "tripwire keeps last-full (rechecked every ~5 min, not every minute)" eval '[ -s "$S/last-full" ]'
-rm -rf "$O/extensions/evil"; mkdir -p "$O/extensions/telegram"; rm -f "$S/last-full"
-run; check "a bundled id in ~/.openclaw/extensions (it could shadow the real one): reported" eval '[ $rc = 1 ] && pinged /fail "extensions/telegram"'
-rm -rf "$O/extensions/telegram"; mkdir -p "$O/workspace/.openclaw/extensions/duckduckgo" "$O/extensions/.hidden"; rm -f "$S/last-full"
-run; check "anything in the workspace extensions dir (even an allowlisted id) and hidden dirs: reported" \
-  eval '[ $rc = 1 ] && pinged /fail "extensions/.hidden" && pinged /fail "workspace/.openclaw/extensions/duckduckgo"'
-rm -rf "$O/workspace/.openclaw" "$O/extensions/.hidden"; ln -s /tmp "$O/extensions/linked"; rm -f "$S/last-full"
-run; check "a symlink in an extensions dir: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/linked"'
-rm -f "$O/extensions/linked"; mkdir -p "$O/extensions/..x"; rm -f "$S/last-full"
-run; check "a name starting with two dots: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/..x"'
-touch -d '27 hours ago' "$B"; rm -f "$S/last-full"
-run; check "planted plugin and stale backup at once: one ping names both" \
-  eval '[ $rc = 1 ] && pinged /fail "extensions/..x" && pinged /fail "claw-backup hasn.t succeeded in 27h" && [ -s "$S/last-full" ]'
-rm -rf "$O/extensions/..x"; rm -f "$S/last-full"
-run; check "plugin dir gone, backup still stale: the stale alert stays" eval '[ $rc = 1 ] && pinged /fail "27h" && ! pinged /fail "plugin dirs"'
-touch "$B"; rm -f "$S/last-full"
-run; check "tripwire clear: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

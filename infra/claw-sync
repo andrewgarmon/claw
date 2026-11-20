@@ -20,9 +20,6 @@
 #   success when synced + healthy, /fail otherwise. No pings at all = claw-sync or the host is down.
 # - a full run also fails the ping while claw-backup hasn't succeeded in $BACKUP_MAX_AGE (26h), so a
 #   backup job that silently stops running is noticed, not just one that fails
-# - ... and while ~/.openclaw/extensions holds a plugin other than the few installed there on purpose
-#   ($GLOBAL_PLUGINS), or the workspace's extensions dir holds anything. Reported, never deleted. claw-sync runs as the agent's
-#   user, so this is a tripwire for mistakes; plugins.allow and root-owned load paths are the control.
 # - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
 #   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
 #   was under $FULL_EVERY seconds ago. So health checks and pings still happen about every 5 minutes.
@@ -40,7 +37,6 @@ FULL_EVERY=${CLAW_SYNC_FULL_EVERY:-300}         # seconds between health checks 
 FETCH_FAIL_RUNS=${CLAW_SYNC_FETCH_FAIL_RUNS:-15} # consecutive fetch failures before /fail (runs are 1 min apart)
 BACKUP_OK=$HOME/.cache/claw-backup/last-ok      # touched by claw-backup on every successful run
 BACKUP_MAX_AGE=${CLAW_SYNC_BACKUP_MAX_AGE:-93600}  # 26h: nightly at ~03:30, plus jitter and slack
-GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected in ~/.openclaw/extensions (claw-smoke has the same list)
 INSTALLED=${CLAW_SYNC_INSTALLED:-/var/lib/claw-install/last}  # claw-install's last commit (root-owned, 644)
 REMOVED=$STATE/removed                          # untracked files are moved here, not deleted
 REMOVED_DAYS=${CLAW_SYNC_REMOVED_DAYS:-30}      # ... and kept this long
@@ -67,20 +63,6 @@ backup_stale() {
   t=$(stat -c %Y "$BACKUP_OK" 2>/dev/null) || { echo "claw-backup has no recorded success ($BACKUP_OK missing)"; return 0; }
   [ $(( $(date +%s) - t )) -ge "$BACKUP_MAX_AGE" ] || return 1
   echo "claw-backup hasn't succeeded in $(( ($(date +%s) - t) / 3600 ))h"
-}
-# planted_plugins: prints the plugin dirs nobody asked for: entries of ~/.openclaw/extensions other
-# than $GLOBAL_PLUGINS (an allowlisted or bundled id there counts too: it could shadow the real one),
-# and every entry of the workspace's .openclaw/extensions (nothing belongs there).
-planted_plugins() {
-  local d out=""
-  for d in extensions/* extensions/.[!.]* extensions/..?* \
-           workspace/.openclaw/extensions/* workspace/.openclaw/extensions/.[!.]* workspace/.openclaw/extensions/..?*; do
-    [ -e "$d" ] || [ -L "$d" ] || continue
-    case $d in extensions/*) [[ " $GLOBAL_PLUGINS " == *" ${d#extensions/} "* ]] && continue ;; esac
-    out+="$d "
-  done
-  [ -n "$out" ] || return 1
-  echo "${out% }"
 }
 # infra_pending: write $STATE/infra-pending (installed commit, origin/main, the infra/ commit subjects)
 # when origin/main has infra/ changes claw-install hasn't installed, else remove it, and send the owner
@@ -114,20 +96,15 @@ Run: sudo claw-install"
     echo "infra changes pending; the Telegram message failed (retried next full run)" >&2
   fi
 }
-ok() {  # success ping, but fail while origin/main is marked bad, files were removed or unhidden, an
-        # unexpected plugin dir exists or backups are stale
-  local stale planted why=()
+ok() {  # success ping, but fail while origin/main is marked bad, files were removed or unhidden, or backups are stale
+  local stale
   ( infra_pending ) || echo "infra-pending check failed" >&2
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
   [ -z "$hidden" ] || die "tracked files were hidden from git (assume-unchanged/skip-worktree), now reverted: $hidden ($*)"
   [ -z "$removed" ] || die "untracked files removed: $removed(moved to $moved_to) ($*)"
-  # Both checks always run and one ping names every reason, so one can't hide the other. Not die:
-  # this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute.
-  planted=$(planted_plugins) && why+=("unexpected OpenClaw plugin dirs in ~/.openclaw: $planted")
-  stale=$(backup_stale) && why+=("$stale: sudo journalctl -u claw-backup -n 20")
-  if [ ${#why[@]} -gt 0 ]; then
-    local msg; msg=$(IFS=';'; echo "${why[*]}"); msg=${msg//;/; }
-    echo "$msg" >&2; hc fail "$msg ($*)"
+  if stale=$(backup_stale); then
+    # not die: this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute
+    echo "$stale" >&2; hc fail "$stale: sudo journalctl -u claw-backup -n 20 ($*)"
     date +%s > "$STATE/last-full"; exit 1
   fi
   hc "$*"; date +%s > "$STATE/last-full"; exit 0

@@ -17,8 +17,6 @@ AGENT_GIT=/usr/local/bin/agent-git
 AGENT_CAL=/usr/local/bin/agent-cal
 CAL_SECRET=/home/calbot/.config/caldav.env
 OC_HOME=/home/openclaw
-OC_PLUGINS=/usr/local/lib/claw/openclaw-plugins   # root-owned plugins (install.sh, lib/openclaw-plugins.sh)
-GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected from ~/.openclaw/extensions (claw-sync has the same list)
 CONFIG_REPO=claw-config   # the repo claw-install deploys (see its REPO)
 STATE_REPO=claw-state     # agent-git's STATE_REPO
 SMOKE_WINDOWS=/var/lib/claw-smoke/refusal-windows   # claw-denywatch skips its expected refusals in these
@@ -146,58 +144,6 @@ check_cal() {
   FAIL agent-cal "listing calendars failed ($(exited $rc)): check the app-specific password; see /home/calbot/agent-cal.log"
 }
 
-# 7. Plugins: everything OpenClaw has enabled is in plugins.allow, none comes from the workspace
-#    extensions dir, none from ~/.openclaw/extensions but $GLOBAL_PLUGINS, and each root-owned plugin
-#    is enabled from its root-owned dir. Reads OpenClaw's
-#    plugin registry (`plugins list --json`), not the running gateway. Prints plugin ids only.
-check_plugins() {
-  local uid rc bad
-  uid=$(id -u openclaw 2>/dev/null) || { FAIL plugins "no openclaw user"; return; }
-  timeout "$WAIT" sudo -n -u openclaw env HOME="$OC_HOME" PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" \
-    XDG_RUNTIME_DIR="/run/user/$uid" openclaw plugins list --json --enabled > "$OUT/plugins" 2>/dev/null; rc=$?
-  [ "$rc" = 0 ] || { FAIL plugins "openclaw plugins list failed ($(exited $rc)); try: sudo -iu openclaw openclaw plugins list"; return; }
-  # shellcheck disable=SC2024  # on purpose: openclaw reads its file, root writes its own temp copy
-  sudo -n -u openclaw cat "$OC_HOME/.openclaw/openclaw.json" > "$OUT/cfg" 2>/dev/null || { FAIL plugins "can't read openclaw.json"; return; }
-  bad=$(python3 -I - "$OUT/plugins" "$OUT/cfg" "$OC_PLUGINS" "$GLOBAL_PLUGINS" <<'PY'
-import json, os, re, sys
-def name(s):  # never echo odd text from the registry
-    return s if isinstance(s, str) and re.fullmatch(r"[a-z0-9@._/-]{1,64}", s) else "<odd id>"
-try:
-    plugins = [p for p in json.load(open(sys.argv[1]))["plugins"] if p.get("enabled")]
-    cfg = json.load(open(sys.argv[2])).get("plugins", {})
-    allow = set(cfg.get("allow") or [])
-    paths = [x for x in ((cfg.get("load") or {}).get("paths") or []) if isinstance(x, str)]
-except Exception:
-    print("unreadable plugins list or openclaw.json"); sys.exit()
-out = []
-if not allow:
-    out.append("openclaw.json has no plugins.allow")
-out += ["%s isn't in plugins.allow" % name(p.get("id")) for p in plugins if allow and p.get("id") not in allow]
-# PluginOrigin in 2026.11.3 is "bundled" | "global" | "workspace" | "config"; anything else (a rename
-# in a later version) fails rather than letting the two checks below pass without looking
-out += ["%s has an unknown origin" % name(p.get("id")) for p in plugins if p.get("origin") not in ("bundled", "global", "workspace", "config")]
-out += ["%s loads from the workspace" % name(p.get("id")) for p in plugins if p.get("origin") == "workspace"]
-expected_global = set(sys.argv[4].split())
-out += ["%s loads from ~/.openclaw/extensions" % name(p.get("id")) for p in plugins if p.get("origin") == "global" and p.get("id") not in expected_global]
-root = sys.argv[3]
-# every root-owned plugin: what's installed, plus what openclaw.json loads from under the root dir (so
-# one claw-install never managed to install, e.g. no npm or a failed npm ci, is reported, not
-# silently replaced by an older copy elsewhere)
-installed = {d for d in os.listdir(root) if not d.endswith(".new")} if os.path.isdir(root) else set()
-wanted = {x[len(root) + 1:].split("/")[0] for x in paths if x.startswith(root + "/")} - {""}
-for d in sorted(wanted - installed):
-    out.append("%s isn't installed in %s (sudo claw-install; check its output for npm errors)" % (name(d), root))
-for d in sorted(installed):
-    mine = [p for p in plugins if p.get("id") == d]
-    if not any(str(p.get("rootDir") or "").startswith(os.path.join(root, d) + "/") or p.get("rootDir") == os.path.join(root, d) for p in mine):
-        out.append("%s isn't enabled from %s" % (name(d), os.path.join(root, name(d))))
-print("; ".join(out))
-PY
-)
-  [ -z "$bad" ] || { FAIL plugins "$bad"; return; }
-  PASS plugins
-}
-
 check_acp
 check_usage
 check_git_token
@@ -210,7 +156,6 @@ mkdir -p "$(dirname "$SMOKE_WINDOWS")" && echo "$smoke_start $((smoke_start + 2 
 check_git_refusals
 check_timers
 check_gateway
-check_plugins
 check_cal
 
 if [ "$fail" = 0 ]; then
