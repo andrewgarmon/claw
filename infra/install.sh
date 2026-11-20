@@ -68,6 +68,10 @@ install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
 # nightly run. Created as openclaw: root never writes under a service user's home.
 (cd / && sudo -u openclaw sh -c '[ -e "$1/last-ok" ] || { mkdir -p "$1" && touch "$1/last-ok"; }' _ /home/openclaw/.cache/claw-backup)
 install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
+# claw-sync (as openclaw) reads the installed commit to say when an install is pending. claw-install
+# writes it 644, but a copy from before that wrote it 600, and the first install after the change
+# still runs that old copy: this fixes the mode on the run after.
+[ ! -f /var/lib/claw-install/last ] || chmod 644 /var/lib/claw-install/last
 
 # --- Claude Code as coder (ACP target)
 id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder

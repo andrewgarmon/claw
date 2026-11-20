@@ -9,6 +9,7 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export CLAW_SYNC_HOME=$T/home CLAW_SYNC_HEALTH_WAIT=0 CLAW_SYNC_IDLE_WAIT=0
 export CLAW_SYNC_FULL_EVERY=0   # every run is a full run, except in the idle fast-path tests at the end
 export CLAW_SYNC_FETCH_FAIL_RUNS=3   # the default (15) is checked separately at the end
+export CLAW_SYNC_INSTALLED=$T/installed   # claw-install's last installed commit (absent until the infra-pending tests)
 unset HEALTHCHECKS_PING_URL
 H=$CLAW_SYNC_HOME BIN=$H/.npm-global/bin
 mkdir -p "$BIN"
@@ -36,6 +37,7 @@ case "\$1 \$2" in
   "config validate") [ -e "$H/kill_on_validate" ] && kill -9 "\$(ps -o ppid= -p \$PPID)"   # claw-sync, not the \$( ) subshell
     grep -q INVALID "$H/.openclaw/openclaw.json" && { echo "Config needs correction: bad key"; exit 1; }; echo "Config valid" ;;
   "gateway health") echo health >> "$H/health"; [ ! -e "$H/gw_down" ] && ! grep -q CRASH "$H/gw_cfg" ;;
+  "message send") printf '%s\n' "\$*" >> "$H/messages"; [ ! -e "$H/msg_fail" ] ;;
   *) exit 2 ;;
 esac
 EOF
@@ -336,5 +338,48 @@ run; check "main whose .gitignore stops covering state: not synced, nothing remo
 cp "$REPO/.gitignore" "$T/dev/.gitignore"; git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore back" && git -C "$T/dev" push -q origin main
 run; check "ignore rules fixed: synced, the planted file removed, state kept" \
   eval '[ $rc = 1 ] && head_is "$(git -C "$T/dev" rev-parse HEAD)" && pinged /fail "untracked files removed: workspace/PLANTED.md" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/.env" ]'
+
+# Infra installed vs merged: a healthy full run writes infra-pending and tells the owner once per
+# new infra/ commit; never a fail ping, and a failed message is retried.
+P=$S/infra-pending
+export CLAW_SYNC_FULL_EVERY=0   # every run full again
+msgs() { grep -c "^message send " "$H/messages" 2>/dev/null || true; }   # one per send; a message spans lines
+echo 'TELEGRAM_ALLOW_FROM=12345' >> "$H/.openclaw/.env"
+rm -f "$S/infra-notified" "$H/messages"
+run; check "installed commit unknown: noted as unknown, one message, healthy ping" \
+  eval '[ $rc = 0 ] && grep -q "^installed unknown$" "$P" && [ "$(msgs)" = 1 ] && grep -q -- "--target 12345 .*can.t tell which infra/ commit is installed" "$H/messages" && pinged "" "up to date"'
+c30=$(commit '{"v":30}')
+run; check "still unknown at a new commit: no second message" eval '[ $rc = 0 ] && [ "$(msgs)" = 1 ]'
+git -C "$T/dev" rev-parse HEAD > "$T/installed"; mkdir -p "$T/dev/infra"
+c31=$(commit '{"v":31}' infra/thing)
+run; check "infra/ commit after the installed one: infra-pending names it, one message, healthy ping" \
+  eval '[ $rc = 0 ] && head_is $c31 && grep -q "^installed $(cat "$T/installed")$" "$P" && grep -q "^origin/main $c31$" "$P" && grep -q "{\"v\":31}" "$P" && [ "$(msgs)" = 2 ] && grep -q "merged but not installed" "$H/messages" && grep -q "sudo claw-install" "$H/messages" && pinged "" ""'
+run; check "same origin/main: no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 2 ] && [ -s "$P" ]'
+c31b=$(commit '{"v":31.5}')
+run; check "a later merge that doesn't touch infra/: still pending, no second message" \
+  eval '[ $rc = 0 ] && [ "$(msgs)" = 2 ] && grep -q "^origin/main $c31b$" "$P" && [ "$(cat "$S/infra-notified")" = "$c31" ]'
+touch "$H/msg_fail"; c32=$(commit '{"v":32}' infra/thing)
+run; check "message fails: run still healthy, not recorded as told" eval '[ $rc = 0 ] && pinged "" "" && [ "$(cat "$S/infra-notified")" = "$c31" ] && grep -q "Telegram message failed" "$T/out"'
+rm "$H/msg_fail"
+run; check "next full run retries the message" eval '[ $rc = 0 ] && [ "$(cat "$S/infra-notified")" = "$c32" ] && grep -q "{\"v\":32}" "$P"'
+echo "$c32" > "$T/installed"; c33=$(commit '{"v":33}')
+run; check "installed up to date, newer commits don't touch infra/: infra-pending removed, no message" \
+  eval '[ $rc = 0 ] && [ ! -e "$P" ] && [ "$(cat "$S/infra-notified")" = "$c32" ]'
+echo 0123456789012345678901234567890123456789 > "$T/installed"
+run; check "installed commit not on origin/main: unknown" eval '[ $rc = 0 ] && grep -q "^installed unknown$" "$P"'
+chmod 000 "$T/installed"
+run; check "unreadable installed file (an old claw-install wrote it 600): unknown, no crash" eval '[ $rc = 0 ] && grep -q "^installed unknown$" "$P" && pinged "" ""'
+chmod 644 "$T/installed"; echo "$c33" > "$T/installed"; sed -i '/^TELEGRAM_ALLOW_FROM=/d' "$H/.openclaw/.env"; rm -f "$S/infra-notified"
+c34=$(commit '{"v":34}' infra/thing)
+run; check "no TELEGRAM_ALLOW_FROM: infra-pending still written, no message, healthy" eval '[ $rc = 0 ] && [ -s "$P" ] && [ ! -e "$S/infra-notified" ] && pinged "" ""'
+
+# a run that resumes an interrupted deploy reaches ok() before the fetch (no origin/main yet): no check,
+# so no false "unknown" message and infra-pending isn't rewritten without a target
+echo 'TELEGRAM_ALLOW_FROM=12345' >> "$H/.openclaw/.env"; echo "$c34" > "$S/infra-notified"; : > "$H/messages"
+cp "$P" "$T/pending-before"; echo 1 > "$H/kill_on_restart"; c35=$(commit '{"v":35}')
+run; rm "$H/kill_on_restart"
+run; check "resumed deploy: no infra check, no message, infra-pending untouched" \
+  eval '[ $rc = 0 ] && pinged "" "deployed ${c35:0:7}" && [ "$(msgs)" = 0 ] && [ "$(cat "$S/infra-notified")" = "$c34" ] && cmp -s "$P" "$T/pending-before"'
+run; check "next full run: checks again, still no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 0 ] && grep -q "^origin/main $c35$" "$P"'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }
