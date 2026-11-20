@@ -232,4 +232,7 @@ test("openclaw.json routes plugin approvals to the owner's Telegram DM with butt
   assert.deepEqual(cfg.approvals?.plugin, { enabled: true, mode: "targets", agentFilter: ["main"], targets: [{ channel: "telegram", to: "${TELEGRAM_ALLOW_FROM}" }] });
   assert.equal(cfg.channels.telegram.capabilities?.inlineButtons, "dm");
   assert.deepEqual(cfg.commands.ownerAllowFrom, ["telegram:${TELEGRAM_ALLOW_FROM}"]);
+  // conversations_send/_turn deliver to any external conversation over the gateway's channel
+  // credentials, around the message hook: denied outright
+  for (const t of ["conversations_list", "conversations_send", "conversations_turn"]) assert.ok(cfg.tools.deny.includes(t), `tools.deny is missing ${t}`);
 });
