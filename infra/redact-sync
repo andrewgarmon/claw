@@ -40,7 +40,7 @@ n=$(printf '%s\n' "$list" | wc -l)
 hash=$(printf '%s\n%s\n' "$REPOS" "$list" | sha256sum | cut -d' ' -f1)
 if [ -s "$STATE/list" ] && [ -z "$allow_removals" ]; then
   gone=$(comm -23 <(sort -u "$STATE/list") <(printf '%s\n' "$list" | sort -u) | wc -l)
-  [ "$gone" = 0 ] || fail "redact.txt has lost $gone entries since the last upload; not uploading. If you removed them, run: sudo /usr/local/lib/claw/redact-sync --allow-removals"
+  [ "$gone" = 0 ] || fail "redact.txt has lost $gone entries since the last upload; not uploading. If you removed them, run: sudo /usr/local/lib/claw/redact-sync --allow-removals && sudo systemctl start claw-redact-sync"
 fi
 if [ "$hash" = "$(cat "$STATE/hash" 2>/dev/null)" ] && [ -n "$(find "$STATE/hash" -mmin -1440 2>/dev/null)" ]; then
   echo "redact-sync: unchanged ($n entries)"; exit 0
