@@ -272,7 +272,7 @@ touch "$B"; rm -f "$S/last-full"
 run; check "backup succeeds again: healthy" eval '[ $rc = 0 ] && pinged "" "up to date"'
 
 # Infra installed vs merged: a healthy full run writes infra-pending and tells the owner once per
-# origin/main commit; never a fail ping, and a failed message is retried.
+# new infra/ commit; never a fail ping, and a failed message is retried.
 P=$S/infra-pending
 export CLAW_SYNC_FULL_EVERY=0   # every run full again
 msgs() { grep -c "^message send " "$H/messages" 2>/dev/null || true; }   # one per send; a message spans lines
@@ -304,5 +304,14 @@ run; check "unreadable installed file (an old claw-install wrote it 600): unknow
 chmod 644 "$T/installed"; echo "$c33" > "$T/installed"; sed -i '/^TELEGRAM_ALLOW_FROM=/d' "$H/.openclaw/.env"; rm -f "$S/infra-notified"
 c34=$(commit '{"v":34}' infra/thing)
 run; check "no TELEGRAM_ALLOW_FROM: infra-pending still written, no message, healthy" eval '[ $rc = 0 ] && [ -s "$P" ] && [ ! -e "$S/infra-notified" ] && pinged "" ""'
+
+# a run that resumes an interrupted deploy reaches ok() before the fetch (no origin/main yet): no check,
+# so no false "unknown" message and infra-pending isn't rewritten without a target
+echo 'TELEGRAM_ALLOW_FROM=12345' >> "$H/.openclaw/.env"; echo "$c34" > "$S/infra-notified"; : > "$H/messages"
+cp "$P" "$T/pending-before"; echo 1 > "$H/kill_on_restart"; c35=$(commit '{"v":35}')
+run; rm "$H/kill_on_restart"
+run; check "resumed deploy: no infra check, no message, infra-pending untouched" \
+  eval '[ $rc = 0 ] && pinged "" "deployed ${c35:0:7}" && [ "$(msgs)" = 0 ] && [ "$(cat "$S/infra-notified")" = "$c34" ] && cmp -s "$P" "$T/pending-before"'
+run; check "next full run: checks again, still no repeat" eval '[ $rc = 0 ] && [ "$(msgs)" = 0 ] && grep -q "^origin/main $c35$" "$P"'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

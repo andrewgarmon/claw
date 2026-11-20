@@ -65,6 +65,7 @@ backup_stale() {
 # and ignored: the run's result never depends on it.
 infra_pending() {
   local inst="" key subjects owner msg
+  [ -n "$target" ] || return 0   # the resume-a-pending-deploy path reaches ok() before the fetch
   [ -r "$INSTALLED" ] && inst=$(head -c 40 "$INSTALLED")
   if [[ $inst =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$inst" "$target" 2>/dev/null; then
     subjects=$(git log --format='%h %s' "$inst..$target" -- infra/ | head -n 20 | LC_ALL=C tr -d '\000-\010\013-\037\177')
