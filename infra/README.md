@@ -33,7 +33,7 @@
 - `agent-git-refusals`: a state-backup push as coder and a `claude/*` push to claw-state as openclaw must both be refused. Both are refused before any network access; each leaves a `DENY` line (branch names `*/claw-smoke`) in agent-git.log.
 - `timers`: `claw-sync.timer` and `claw-backup.timer` are enabled, active and have a next run.
 - `gateway`: `~/.openclaw` is at `origin/main` (as of claw-sync's last fetch) and `openclaw gateway health` answers.
-- `plugins`: OpenClaw's plugin registry (`openclaw plugins list --json --enabled`, as openclaw) has only ids from `plugins.allow` enabled, none from the workspace extensions dir, and each root-owned plugin enabled from its dir under `/usr/local/lib/claw/openclaw-plugins/`. Prints plugin ids only.
+- `plugins`: OpenClaw's plugin registry (`openclaw plugins list --json --enabled`, as openclaw) has only ids from `plugins.allow` enabled, none from the workspace extensions dir, and each root-owned plugin enabled from its dir under `/usr/local/lib/claw/openclaw-plugins/`. A plugin `openclaw.json` loads from there that isn't installed (no npm, or `npm ci` failed during `claw-install`) fails too, so an older copy elsewhere can't quietly stand in. Prints plugin ids only.
 - `agent-cal`: one read-only `calendars` call, skipped if the broker or its secret isn't there.
 
 It only reads, or makes calls that are refused before the network: it never pushes, messages Telegram, creates events or calls a model, and it never prints command output, only its own reasons.

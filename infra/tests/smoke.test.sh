@@ -220,6 +220,13 @@ plugins_json "$OC/.openclaw/extensions/duckduckgo"
 run; check "root-owned plugin enabled from somewhere else: FAIL" eval '[ $rc = 1 ] && says "FAIL plugins: duckduckgo isn.t enabled from $T/ocp/duckduckgo"'
 plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id":"x;rm -rf $(id)","enabled":true,"origin":"global"}'
 run; check "an odd plugin id is never echoed" eval '[ $rc = 1 ] && says "<odd id> isn.t in plugins.allow" && ! says "rm -rf"'
+echo "{\"plugins\":{\"allow\":[\"duckduckgo\",\"telegram\",\"claw-tools\"],\"load\":{\"paths\":[\"$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin\",\"$T/ocp/claw-tools\"]}}}" > "$OC/.openclaw/openclaw.json"
+plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id":"claw-tools","enabled":true,"origin":"global","rootDir":"/h/.openclaw/extensions/claw-tools"}'
+run; check "a load path under the root-owned dir that was never installed: FAIL" eval '[ $rc = 1 ] && says "FAIL plugins:" && says "claw-tools isn.t installed in $T/ocp" && ! says "duckduckgo isn.t installed"'
+mkdir -p "$T/ocp/claw-tools"
+plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" ',{"id":"claw-tools","enabled":true,"origin":"config","rootDir":"'"$T"'/ocp/claw-tools"}'
+run; check "...and once installed and loaded from there: PASS" eval '[ $rc = 0 ] && says "PASS plugins"'
+rm -rf "$T/ocp/claw-tools"; git -C "$OC/.openclaw" checkout -q openclaw.json
 plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"; touch "$T/plugins_fail"
 run; check "plugins list fails: FAIL" eval '[ $rc = 1 ] && says "FAIL plugins: openclaw plugins list failed"'
 rm "$T/plugins_fail"
