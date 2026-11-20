@@ -53,7 +53,9 @@ class AgentCal(unittest.TestCase):
         cls.url = f"http://127.0.0.1:{port}/"
         cfg = os.path.join(cls.tmp.name, "config")
         with open(cfg, "w") as f:
-            f.write(f"[server]\nhosts = 127.0.0.1:{port}\n[auth]\ntype = none\n"
+            # auth delay = 0: Radicale waits ~1 s (by default) before every 401, and the caldav client
+            # always sends its first request without credentials, so each agent-cal call paid it once
+            f.write(f"[server]\nhosts = 127.0.0.1:{port}\n[auth]\ntype = none\ndelay = 0\n"
                     f"[storage]\nfilesystem_folder = {cls.tmp.name}/collections\n[logging]\nlevel = error\n")
         cls.rad = subprocess.Popen([RADICALE_PY, "-m", "radicale", "--config", cfg],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -21,7 +21,7 @@ git clone https://github.com/andrewgarmon/claw claw-config && cd claw-config
 rm -rf .git && git init -q -b main
 grep -rlI andrewgarmon . | xargs sed -i 's/andrewgarmon/YOU/g'          # GitHub owner in scripts and docs
 cp workspace/local/AGENTS.md.example workspace/local/AGENTS.md          # fill it in now or later
-for t in infra/tests/*.test.sh infra/brokers/*/test.sh; do bash "$t" >/dev/null 2>&1 || echo "FAIL $t"; done   # no output = all pass
+infra/tests/run-all.sh | tail -3                                         # ends with "all passed"
 ```
 Name the repo **`claw-config`** (the rules and scripts assume that name). Create it on GitHub as **private**, then push:
 ```bash
