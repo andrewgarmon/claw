@@ -23,6 +23,7 @@ workspace/memory/
 !infra/
 !infra/**
 
-# Python bytecode from test runs
-__pycache__/
-*.pyc
+# Python bytecode from infra test runs. Only under infra/: elsewhere (a skill folder) a planted .pyc
+# could run in place of the reviewed .py, so claw-sync must see it and remove it.
+/infra/**/__pycache__/
+/infra/**/*.pyc

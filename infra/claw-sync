@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # claw-sync: make ~/.openclaw match origin/main. Runs as openclaw from a root-owned systemd timer.
 # - reverts local drift in tracked files and removes untracked files (anything git neither tracks nor
-#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. What counts as
+#   ignores, e.g. a new file in workspace/ or skills/), naming them in a fail ping. They're moved to
+#   ~/.cache/claw-sync/removed/<time>/ (kept 30 days), not deleted, so a mistake can be undone. What counts as
 #   ignored comes only from the .gitignore committed at HEAD, so ignored state (.env, USER.md,
 #   memory/, state-backup/, ...) is left alone and a planted .gitignore can't hide anything.
 # - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
@@ -25,6 +26,9 @@
 # - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
 #   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
 #   was under $FULL_EVERY seconds ago. So health checks and pings still happen about every 5 minutes.
+# - a full run with a healthy gateway also checks whether origin/main has infra/ commits newer than the one
+#   claw-install last installed (that's manual, on purpose): it writes $STATE/infra-pending and tells
+#   the owner once on Telegram. Never a /fail: it isn't an outage.
 set -eEuo pipefail
 export HOME=${CLAW_SYNC_HOME:-/home/openclaw}   # override only for tests
 export PATH=$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
@@ -37,6 +41,10 @@ FETCH_FAIL_RUNS=${CLAW_SYNC_FETCH_FAIL_RUNS:-15} # consecutive fetch failures be
 BACKUP_OK=$HOME/.cache/claw-backup/last-ok      # touched by claw-backup on every successful run
 BACKUP_MAX_AGE=${CLAW_SYNC_BACKUP_MAX_AGE:-93600}  # 26h: nightly at ~03:30, plus jitter and slack
 GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected in ~/.openclaw/extensions (claw-smoke has the same list)
+INSTALLED=${CLAW_SYNC_INSTALLED:-/var/lib/claw-install/last}  # claw-install's last commit (root-owned, 644)
+REMOVED=$STATE/removed                          # untracked files are moved here, not deleted
+REMOVED_DAYS=${CLAW_SYNC_REMOVED_DAYS:-30}      # ... and kept this long
+REMOVED_MAX_MB=${CLAW_SYNC_REMOVED_MAX_MB:-200}  # past this in all, removed files are deleted instead
 exec 9>"$STATE/lock"; flock -n 9 || exit 0
 cd "$HOME/.openclaw"
 
@@ -74,11 +82,45 @@ planted_plugins() {
   [ -n "$out" ] || return 1
   echo "${out% }"
 }
-ok() {  # success ping, but fail while origin/main is marked bad, untracked files were removed, an unexpected
-        # plugin dir exists or backups are stale
+# infra_pending: write $STATE/infra-pending (installed commit, origin/main, the infra/ commit subjects)
+# when origin/main has infra/ changes claw-install hasn't installed, else remove it, and send the owner
+# one Telegram message per new infra/ commit: merges that don't touch infra/ don't repeat it (one
+# message in all while the installed commit is unknown).
+# Runs at the start of ok(), i.e. on every full run whose gateway is healthy (even one that then fails
+# its ping for a bad main or a stale backup; the message goes through the gateway). Any failure here is logged
+# and ignored: the run's result never depends on it.
+infra_pending() {
+  local inst="" key subjects owner msg
+  [ -n "$target" ] || return 0   # the resume-a-pending-deploy path reaches ok() before the fetch
+  [ -r "$INSTALLED" ] && inst=$(head -c 40 "$INSTALLED")
+  if [[ $inst =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$inst" "$target" 2>/dev/null; then
+    subjects=$(git log --format='%h %s' "$inst..$target" -- infra/ | head -n 20 | LC_ALL=C tr -d '\000-\010\013-\037\177')
+    [ -n "$subjects" ] || { rm -f "$STATE/infra-pending"; return 0; }
+    key=$(git log -1 --format=%H "$inst..$target" -- infra/)   # newest pending infra/ commit
+    msg="infra changes are merged but not installed on $(hostname):
+$subjects
+Run: sudo claw-install"
+  else
+    inst=unknown key=unknown subjects="(can't tell what's installed: no readable $INSTALLED on origin/main's history)"
+    msg="claw-sync on $(hostname) can't tell which infra/ commit is installed. Run sudo claw-install once to record it."
+  fi
+  printf 'installed %s\norigin/main %s\n%s\n' "$inst" "$target" "$subjects" > "$STATE/infra-pending"
+  [ "$(cat "$STATE/infra-notified" 2>/dev/null)" != "$key" ] || return 0
+  [ -r .env ] && owner=$(sed -n 's/^TELEGRAM_ALLOW_FROM=//p' .env | tail -n1 | tr -d "\"' \r")
+  [[ ${owner:-} =~ ^[0-9]{1,20}$ ]] || { echo "infra changes pending; no TELEGRAM_ALLOW_FROM to tell" >&2; return 0; }
+  if timeout 60 openclaw message send --channel telegram --target "$owner" --message "$msg" >/dev/null 2>&1; then
+    echo "$key" > "$STATE/infra-notified"; echo "told the owner: infra changes pending (${key:0:7})"
+  else
+    echo "infra changes pending; the Telegram message failed (retried next full run)" >&2
+  fi
+}
+ok() {  # success ping, but fail while origin/main is marked bad, files were removed or unhidden, an
+        # unexpected plugin dir exists or backups are stale
   local stale planted why=()
+  ( infra_pending ) || echo "infra-pending check failed" >&2
   [ -z "$target" ] || [ "$target" != "$bad" ] || die "origin/main ${target:0:7} is marked bad (failed validation or health); still running ${want:0:7} ($*)"
-  [ -z "$removed" ] || die "untracked files removed: $removed ($*)"
+  [ -z "$hidden" ] || die "tracked files were hidden from git (assume-unchanged/skip-worktree), now reverted: $hidden ($*)"
+  [ -z "$removed" ] || die "untracked files removed: $removed(moved to $moved_to) ($*)"
   # Both checks always run and one ping names every reason, so one can't hide the other. Not die:
   # this full run is otherwise fine, so keep last-full and recheck in ~5 min, not every minute.
   planted=$(planted_plugins) && why+=("unexpected OpenClaw plugin dirs in ~/.openclaw: $planted")
@@ -100,19 +142,43 @@ healthy() {  # wait up to $1 seconds for the gateway to be active and answering 
   done
 }
 cfg_hash() { sha256sum openclaw.json | cut -d' ' -f1; }
-# untracked [-z]: files git neither tracks nor ignores, judged only by the .gitignore committed at
-# HEAD. Nested .gitignore files, .git/info/exclude and core.excludesFile are not consulted: the
-# agent's user can write all of those, and could use them to hide a planted file.
-# clean_tree: no drift in tracked files, none of those.
-untracked() {
-  local ign rc=0
+# untracked_at <rev> [-z]: files git neither tracks nor ignores, judged only by <rev>'s committed
+# .gitignore. Nested .gitignore files, .git/info/exclude and core.excludesFile are not consulted: the
+# agent's user can write all of those, and could use them to hide a planted file. Fails (status 2) if
+# <rev> has no .gitignore: everything, state included, would count as untracked, so never delete then.
+# untracked [-z]: the same at HEAD.
+untracked_at() {
+  local ign rc=0 rev=$1; shift
   ign=$(mktemp)
-  git show HEAD:.gitignore > "$ign" 2>/dev/null || : > "$ign"
+  git show "$rev:.gitignore" > "$ign" 2>/dev/null || { rm -f "$ign"; echo "no .gitignore at ${rev:0:7}" >&2; return 2; }
   git -c core.excludesFile=/dev/null ls-files --others --exclude-from="$ign" "$@" || rc=$?
   rm -f "$ign"; return "$rc"
 }
-clean_tree() { git diff --quiet HEAD && [ -z "$(untracked)" ]; }
-removed=""   # untracked files this run deleted; ok() turns the success ping into a fail ping
+untracked() { untracked_at HEAD "$@"; }
+# flagged [-z]: tracked files marked assume-unchanged or skip-worktree. git diff doesn't look at those,
+# so the agent's user could set the flag and edit the file in place unseen. They count as drift.
+flagged() {
+  local z=${1:-} e
+  git ls-files -v -z | while IFS= read -r -d '' e; do
+    case ${e:0:1} in [a-z]|S) if [ "$z" = -z ]; then printf '%s\0' "${e:2}"; else printf '%s\n' "${e:2}"; fi ;; esac
+  done
+}
+# clean_tree: no drift in tracked files (hidden or not) and no untracked files
+clean_tree() {
+  local u f
+  git diff --quiet HEAD && f=$(flagged) && [ -z "$f" ] && u=$(untracked) && [ -z "$u" ]
+}
+# protected <path>: never removed, whatever .gitignore says: the agent's state and secrets. One of these
+# showing up as untracked means the committed ignore rules are broken (e.g. a PR dropped a line), so
+# the run changes nothing and fails instead.
+protected() {
+  case $1 in
+    .env|.env.*|agents/*|credentials/*|state-backup/*|workspace/memory/*|workspace/USER.md|workspace/MEMORY.md|workspace/DREAMS.md) return 0 ;;
+  esac
+  return 1
+}
+removed="" hidden="" moved_to=""   # untracked files this run deleted / tracked files it found hidden from git diff;
+                      # ok() turns the success ping into a fail ping for either
 validate() {
   local out
   out=$(openclaw config validate 2>&1) && return 0
@@ -218,10 +284,26 @@ if [ "$before" = "$want" ] && clean_tree; then
   ok "up to date at ${before:0:7}, gateway healthy"
 fi
 
+# Before the tree changes, judge what would be removed by the target's .gitignore. No .gitignore, or
+# state it doesn't ignore, means the committed ignore rules are broken: stop with nothing changed.
+left=$(untracked_at "$want") || die "${want:0:7} has no .gitignore; not syncing (it decides which files are state to keep)"
+keep=""
+while IFS= read -r f; do [ -z "$f" ] || ! protected "$f" || keep+="$f "; done <<< "$left"
+[ -z "$keep" ] || die "not syncing ${want:0:7}: its .gitignore doesn't cover state that must never be removed ($keep). Nothing removed"
+
 cfg_before=$(cfg_hash)
 cfg_new=$(git show "$want:openclaw.json" | sha256sum | cut -d' ' -f1)
 # Mark the deploy pending before the tree changes, so a run killed during validate/restart is resumed.
 [ "$cfg_new" = "$cfg_before" ] || echo "$want" > "$STATE/pending"
+# assume-unchanged/skip-worktree hide edits from git diff and survive a reset: clear them first
+fl=$(flagged)
+if [ -n "$fl" ]; then
+  hidden=$(printf '%s\n' "$fl" | sed -n '1,20p' | tr '\n' ' ')
+  echo "clearing assume-unchanged/skip-worktree on: $hidden" >&2
+  # two calls: given together, update-index applies only the last of the two options
+  flagged -z | xargs -0r git update-index -q --no-assume-unchanged --
+  flagged -z | xargs -0r git update-index -q --no-skip-worktree --
+fi
 [ "$before" = "$want" ] && ! git diff --quiet HEAD && echo "reverting local drift: $(git diff --name-only HEAD | tr '\n' ' ')"
 git checkout -q main 2>/dev/null || true
 git reset -q --hard "$want"
@@ -231,11 +313,32 @@ if [ -n "$left" ]; then
   n=$(printf '%s\n' "$left" | wc -l)
   removed=$(printf '%s\n' "$left" | sed -n '1,20p' | tr '\n' ' ')
   [ "$n" -le 20 ] || removed+="(and $((n - 20)) more)"
-  echo "removing untracked files: $removed" >&2
+  # moved, not deleted, so a file that should have been kept (one never committed, say) can be put
+  # back: $REMOVED/<time>/<its path>, outside ~/.openclaw, so nothing there is loaded. Kept
+  # $REMOVED_DAYS days.
+  # Nothing here may stop the run (it's after the reset, before validate): if the directory can't be
+  # set up (disk full, or the agent's user put a file or symlink at $REMOVED), the files are deleted.
+  # The size cap is checked before this run's move, so it's a soft limit; it stops something that
+  # recreates a big file every minute from filling the disk.
+  moved_to="nowhere: $REMOVED isn't a usable directory, so these were deleted"
+  if [ ! -L "$REMOVED" ] && mkdir -p "$REMOVED" 2>/dev/null && [ -d "$REMOVED" ]; then
+    find "$REMOVED" -mindepth 1 -maxdepth 1 -mtime +"$REMOVED_DAYS" -exec rm -rf -- {} + 2>/dev/null || true
+    if [ "$(du -sm "$REMOVED" 2>/dev/null | cut -f1)" -lt "$REMOVED_MAX_MB" ] 2>/dev/null; then
+      moved_to=$(mktemp -d "$REMOVED/$(date +%Y%m%dT%H%M%S).XXXX" 2>/dev/null) \
+        || moved_to="nowhere: couldn't create a directory in $REMOVED, so these were deleted"
+    else
+      moved_to="nowhere: $REMOVED is over ${REMOVED_MAX_MB} MB, so these were deleted"
+    fi
+  fi
+  echo "removing untracked files (moving them to $moved_to): $removed" >&2
   # exactly those paths (not git clean, which would honour the excludes ignored above); then any
   # directory left empty, up to the first one that isn't
   while IFS= read -r -d '' f; do
-    rm -rf -- "$f"
+    if [ -d "$moved_to" ]; then   # never leave it in place: if the move fails, delete it
+      { mkdir -p -- "$moved_to/$(dirname -- "${f%/}")" && mv -f -- "$f" "$moved_to/${f%/}"; } 2>/dev/null || rm -rf -- "$f"
+    else
+      rm -rf -- "$f"
+    fi
     d=$(dirname -- "${f%/}")
     while [ "$d" != . ] && rmdir -- "$d" 2>/dev/null; do d=$(dirname -- "$d"); done
   done < <(untracked -z)

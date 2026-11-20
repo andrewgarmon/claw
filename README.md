@@ -19,7 +19,7 @@ Config, rules and host plumbing for a personal AI assistant on [OpenClaw](https:
 - `skills/`: shared skills. Private ones live in `workspace/skills/` in the private repo.
 - `infra/`: host scripts, systemd units and brokers. See [`infra/README.md`](infra/README.md).
 
-This repo is the shared half. The owner's private `claw-config` pulls it through daily sync PRs and adds the personal files (persona, install-specific rules, private skills).
+This repo is the shared half. The owner's private `claw-config` pulls it through sync PRs and adds the personal files (persona, install-specific rules, private skills). A push to main here starts that sync within about a minute (`.github/workflows/sync-dispatch.yml`: set the repo variable `SYNC_DISPATCH_REPO` to the config repo's name, and the secret `SYNC_DISPATCH_TOKEN` to a fine-grained token for only that repo with Actions: read and write). The config repo's daily run stays as a backstop.
 
 ## Security model
 - **One job per Linux user:** the admin user (sudo), `openclaw` (the agent, no sudo), `coder` (Claude Code, read-only GitHub token), `gitbot` (GitHub writes), `calbot` (calendar password).

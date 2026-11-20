@@ -2,7 +2,6 @@
 # agent-git: the only path from agents on claw to GitHub writes.
 # Runs as gitbot via sudo. Agents never see the token.
 #   agent-git pr <repo> <branch> <title>              stdin: optional body, then the branch bundle
-#   agent-git new-repo <name> [description]          also creates the allowlisted issue labels
 #   agent-git issue <repo> <title> [labels]           stdin: body (optional); labels comma-separated, allowlisted
 #   agent-git issue-list <repo> [label] [state]       state open (default), closed or all; JSON
 #   agent-git issue-view <repo> <number>
@@ -10,6 +9,7 @@
 #   agent-git issue-label <repo> <number> <add|remove> <label>
 #   agent-git issue-close <repo> <number>             stdin: closing comment (required)
 #   agent-git issue-reopen <repo> <number>
+#   agent-git pr-comments <repo> <number>             reviews and comments from the owner or the Claude review app; JSON
 # Bodies come on stdin, never argv, so callers can pass them in a single-quoted heredoc
 # (<<'EOF') and the shell can't expand backticks or $ in them. For pr, the body ends at the
 # first line that is exactly "# v2 git bundle" or "# v3 git bundle" (the bundle's own header):
@@ -27,8 +27,12 @@
 # Public repos (GitHub says public, or listed in ~/.config/public-repos): every write verb is
 # coder-only, and before anything is written the text that would go public (PR commits and diffs,
 # branch name, titles, bodies, comments) is checked against ~/.config/redact.txt and gitleaks.
-# A hit is refused and logged without the matched text. Reads stay open to every caller.
-# new-repo always creates private repos; making one public is the owner's call.
+# A hit is refused and logged without the matched text. Reads stay open to every caller, but on a
+# public repo they only return what the owner wrote: issue-list lists the owner's issues, issue-view
+# refuses anyone else's issue and drops other people's comments, and pr-comments (any repo) keeps only
+# the owner and the Claude review app. Anyone can write on a public repo; agents must not read it.
+# No repo creation: the token has no Administration permission (it could delete repos or make them
+# public). The owner creates repos on github.com; the token covers all repos, new ones included.
 # Broker: infra/brokers/git (broker.conf, test.sh); helpers in infra/lib/broker.sh.
 set -euo pipefail
 umask 077
@@ -50,11 +54,12 @@ broker_secret_raw "$HOME/.config/gh-token" GH_TOKEN
 # git gets the token via a credential helper reading the env, so it never appears in argv / ps
 GIT_AUTH=(-c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' -c core.hooksPath=/dev/null)
 
+# repo names are lowercased on entry (GitHub's aren't case-sensitive, the state-repo rule is)
 valid_repo()   { [[ "$1" =~ ^[A-Za-z0-9._-]{1,100}$ && "$1" != .* ]]; }
 valid_number() { [[ "$1" =~ ^[1-9][0-9]{0,8}$ ]]; }
 valid_label()  { local l; for l in "${ISSUE_LABELS[@]}"; do [ "$1" = "$l" ] && return 0; done; return 1; }
 valid_title()  { broker_valid_line $MAX_TITLE "$1"; }
-valid_body()   { [ ${#1} -le $MAX_BODY ]; }
+valid_body()   { [ "$(broker_chars "$1")" -le $MAX_BODY ]; }   # characters, not bytes
 # read_body <what>: body text from stdin into $body (see broker_read_stdin)
 read_body() { broker_read_stdin $MAX_BODY "$1"; }
 STDIN_HINT="bodies go on stdin, not as arguments: use a <<'EOF' heredoc"
@@ -100,12 +105,15 @@ repo_visibility() {
   REPO_DEFAULT=${info#* }
   [[ $REPO_DEFAULT =~ ^[A-Za-z0-9._/-]{1,100}$ ]] || REPO_DEFAULT=
   if [ "$REPO_PUBLIC" = 0 ] && [ -r "$PUBLIC_REPOS_FILE" ]; then
-    for r in $(grep -v '^[[:space:]]*#' "$PUBLIC_REPOS_FILE"); do [ "$r" = "$1" ] && REPO_PUBLIC=1; done
+    for r in $(grep -v '^[[:space:]]*#' "$PUBLIC_REPOS_FILE"); do [ "${r,,}" = "$1" ] && REPO_PUBLIC=1; done  # $1 is lowercased
   fi
   return 0
 }
 # guard_write <repo> <verb>: call before any write. Public repos take writes from coder only:
-# Claude Code can't read the assistant's memory, so it's the safer writer.
+# Claude Code can't read the assistant's live workspace (its memory files), so it's the safer writer.
+# (Its read-only token can read claw-state. claw-backup encrypts new snapshots, but plaintext ones
+# from before encryption stay in that history until the owner recreates the repo, and the
+# encryption is claw-backup's doing, not enforced here: openclaw could push plaintext itself.)
 guard_write() {
   repo_visibility "$1"
   [ "$REPO_PUBLIC" = 1 ] || return 0
@@ -124,13 +132,21 @@ leak_check() {
   # UTF-8 locale so -i also folds non-ASCII letters (sudo leaves gitbot in the C locale)
   for f in "$dir"/*; do LC_ALL=C.UTF-8 grep -aqiF -f "$dir.redact" "$f" && hits+=" ${f##*/}"; done
   [ -z "$hits" ] || die "refused: $repo is public and the${hits} contain a redact.txt entry (not shown). Remove it and try again."
+  secret_check "$repo" "$dir" "$repo is public and"
+  log "LEAK-CHECK-OK $repo"
+}
+# secret_check <repo> <dir> <why>: refuse if gitleaks finds a secret in <dir>. The message and the
+# log name the rule and the part (file), never the match.
+secret_check() {
+  local repo=$1 dir=$2 why=$3 found rules
   # gitleaks skips lines marked gitleaks:allow; agents don't get to opt out
   sed -i 's/gitleaks:allow/gitleaks-allow-ignored/Ig' "$dir"/*
   gitleaks detect --no-git --source "$dir" --redact --exit-code 1 --report-format json --report-path "$dir.gitleaks.json" >/dev/null 2>&1 || {
-    found=$(grep -o '"File": *"[^"]*"' "$dir.gitleaks.json" 2>/dev/null | sed -e 's|.*/||' -e 's|"$||' | sort -u | paste -sd ' ' -)
-    die "refused: $repo is public and gitleaks flagged ${found:-something (or failed to run)}. Remove the secret and try again."
+    found=$(grep -o '"File": *"[^"]*"' "$dir.gitleaks.json" 2>/dev/null | sed -e 's|.*/||' -e 's|"$||' | sort -u | paste -sd ' ' -) || true
+    rules=$(grep -o '"RuleID": *"[A-Za-z0-9_.-]*"' "$dir.gitleaks.json" 2>/dev/null | sed -e 's|.*: *"||' -e 's|"$||' | sort -u | paste -sd ' ' -) || true
+    log "SECRET-FOUND $repo rules=${rules:-?} parts=${found:-?}"
+    die "refused: $why gitleaks flagged ${found:-something (or failed to run)}${rules:+ (rule: $rules)}. Remove the secret and try again."
   }
-  log "LEAK-CHECK-OK $repo"
 }
 # check_texts <repo> <name> <text> [<name> <text>]...: leak_check these texts if the repo is public
 check_texts() {
@@ -142,15 +158,54 @@ check_texts() {
   leak_check "$repo" "$SCAN_TMP/scan"
 }
 
+# owner_only <mode> <files>...: keep what the repo owner wrote (author_association OWNER) and, for PR
+# reviews and comments, the Claude review app (claude[bot], a Bot). Input files are raw GitHub API
+# output (gh api --paginate, so possibly several JSON arrays back to back). Prints JSON with a
+# "dropped" count. Mode issue: exits 3 if the issue itself isn't the owner's.
+OWNER_ONLY_PY='
+import json, sys
+def items(path):
+    s, i, d, out = open(path, encoding="utf-8").read(), 0, json.JSONDecoder(), []
+    while True:
+        while i < len(s) and s[i].isspace(): i += 1
+        if i >= len(s): return out
+        v, i = d.raw_decode(s, i)
+        out.extend(v if isinstance(v, list) else [v])
+def trusted(x, bot):
+    u = x.get("user") or {}
+    return x.get("author_association") == "OWNER" or (bot and u.get("login") == "claude[bot]" and u.get("type") == "Bot")
+who = lambda x: (x.get("user") or {}).get("login")
+dropped = 0
+def keep(xs, bot, shape):
+    global dropped
+    kept = [shape(x) for x in xs if trusted(x, bot)]
+    dropped += len(xs) - len(kept)
+    return kept
+mode = sys.argv[1]
+if mode == "pr":
+    out = {"reviews": keep(items(sys.argv[2]), True, lambda x: {"author": who(x), "state": x.get("state"), "submittedAt": x.get("submitted_at"), "body": x.get("body") or ""}),
+           "review_comments": keep(items(sys.argv[3]), True, lambda x: {"author": who(x), "path": x.get("path"), "line": x.get("line"), "createdAt": x.get("created_at"), "body": x.get("body") or ""}),
+           "comments": keep(items(sys.argv[4]), True, lambda x: {"author": who(x), "createdAt": x.get("created_at"), "body": x.get("body") or ""})}
+else:
+    [i] = items(sys.argv[2])
+    if not trusted(i, False): sys.exit(3)
+    out = {"number": i.get("number"), "title": i.get("title"), "state": (i.get("state") or "").upper(), "url": i.get("html_url"),
+           "body": i.get("body") or "", "labels": [l.get("name") for l in i.get("labels") or []],
+           "comments": keep(items(sys.argv[3]), False, lambda x: {"author": who(x), "createdAt": x.get("created_at"), "body": x.get("body") or ""})}
+out["dropped"] = dropped
+json.dump(out, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+print()
+'
+
 cmd=${1:-}; shift || true
 case "$cmd" in
   pr)
     [ $# -ge 3 ] || die "usage: pr <repo> <branch> <title>  (stdin: optional body, then the bundle)"
     [ $# -eq 3 ] || die "too many arguments: $STDIN_HINT, followed by the bundle"
-    repo=$1 branch=$2 title=$3
+    repo=${1,,} branch=$2 title=$3
     valid_repo "$repo"     || die "bad repo name: $repo"
     valid_branch "$branch" || die "branch must be agent/<name> or claude/<name>: $branch"
-    [ -n "$title" ] && [ ${#title} -le 200 ] || die "title empty or too long"
+    valid_title "$title" || die "title empty, too long (max $MAX_TITLE) or has control characters"
     [ -t 0 ] && die "pipe a bundle on stdin: git bundle create - $branch | sudo -u gitbot agent-git pr ..."
     state_push=0
     if [[ "$branch" == agent/state/* ]] || [ "$repo" = "$STATE_REPO" ]; then
@@ -174,12 +229,21 @@ case "$cmd" in
     guard_write "$repo" pr
 
     work="$HOME/repos/$repo.git"
+    mkdir -p "$HOME/repos"
+    # one pr at a time per repo, from fetch to push: what's pushed is always what was scanned
+    exec 9>"$work.lock"
+    flock -w 120 9 || die "another agent-git pr for $repo is still running; try again in a minute"
     [ -d "$work" ] || git init -q --bare "$work"
     git -C "$work" config core.hooksPath /dev/null
     git -C "$work" bundle verify -q "$tmp/in.bundle" >/dev/null 2>&1 || die "invalid bundle (create it from the full branch: git bundle create - $branch)"
-    # take only the named branch out of the bundle, into a private ref
-    git -C "$work" fetch -q --no-tags "$tmp/in.bundle" "+refs/heads/$branch:refs/agent/$branch" \
+    # take only the named branch out of the bundle, into a ref of this call's own, and resolve it
+    # once: the scan and the push both use that commit id, never a ref name another call could move
+    ref="refs/agent-tmp/$$/$branch"
+    trap 'git -C "$work" update-ref -d "$ref" 2>/dev/null; rm -rf "$tmp"' EXIT
+    git -C "$work" fetch -q --no-tags "$tmp/in.bundle" "+refs/heads/$branch:$ref" \
       || die "bundle has no refs/heads/$branch"
+    sha=$(git -C "$work" rev-parse --verify -q "$ref^{commit}") && [[ $sha =~ ^[0-9a-f]{40,64}$ ]] \
+      || die "bundle has no commit on refs/heads/$branch"
     if [ "$REPO_PUBLIC" = 1 ]; then
       # check what would go public: every commit not already on the default branch (message,
       # author/committer, and the lines it adds, as text), plus the branch name, title and body.
@@ -188,7 +252,7 @@ case "$cmd" in
       printf '%s\n' "$title" > "$tmp/scan/title"
       printf '%s\n' "$body" > "$tmp/scan/body"
       printf '%s\n' "$branch" > "$tmp/scan/branch-name"
-      range=("refs/agent/$branch")
+      range=("$sha")
       if [ -n "$REPO_DEFAULT" ] && git -C "$work" "${GIT_AUTH[@]}" fetch -q --no-tags "$REMOTE_BASE/$repo.git" \
            "+refs/heads/$REPO_DEFAULT:refs/base/$REPO_DEFAULT" 2>/dev/null; then
         range+=("^refs/base/$REPO_DEFAULT")
@@ -213,8 +277,21 @@ case "$cmd" in
       leak_check "$repo" "$tmp/scan"
     fi
     if [ "$state_push" = 1 ]; then
+      # state backups are permanent history too: a token pasted in chat and saved to memory mustn't
+      # land there. Scan what this push adds on top of the branch as it is on GitHub.
+      mkdir "$tmp/scan"
+      srange=("$sha")
+      if git -C "$work" "${GIT_AUTH[@]}" fetch -q --no-tags "$REMOTE_BASE/$repo.git" "+refs/heads/$branch:refs/base/$branch" 2>/dev/null; then
+        srange+=("^refs/base/$branch")
+      fi  # else (first push): the whole history
+      git -C "$work" log -p --format= --text --unified=0 --no-renames "${srange[@]}" > "$tmp/diff" \
+        && awk '/^diff --git /{h=1; next} /^@@ /{h=0; next} !h && /^\+/' "$tmp/diff" > "$tmp/scan/added-lines" \
+        && git -C "$work" log --format=%B "${srange[@]}" > "$tmp/scan/commit-messages" \
+        || die "could not read the state commits to check them; nothing pushed"
+      secret_check "$repo" "$tmp/scan" "a state backup can't carry a secret, and"
+
       # state backups: never force. GitHub refuses a non-fast-forward, so the history can only grow.
-      if ! out=$(git -C "$work" "${GIT_AUTH[@]}" push --porcelain "$REMOTE_BASE/$repo.git" "refs/agent/$branch:refs/heads/$branch" 2>&1); then
+      if ! out=$(git -C "$work" "${GIT_AUTH[@]}" push --porcelain "$REMOTE_BASE/$repo.git" "$sha:refs/heads/$branch" 2>&1); then
         if grep -q '\[rejected\]' <<< "$out"; then
           log "PUSH-REFUSED non-fast-forward $repo $branch"
           die "refused: this would replace the history of $branch on $repo (non-fast-forward). If ~/.openclaw/state-backup was lost or rebuilt, restore it from the branch (infra/README.md: Restoring state); nothing was pushed."
@@ -223,10 +300,10 @@ case "$cmd" in
       fi
     else
       # push only to the same agent branch on GitHub (force is fine: it's the agent's own branch)
-      git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+refs/agent/$branch:refs/heads/$branch" \
+      git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+$sha:refs/heads/$branch" \
         || die "push failed for $repo $branch"
     fi
-    log "PUSH $repo $branch $(git -C "$work" rev-parse "refs/agent/$branch")"
+    log "PUSH $repo $branch $sha"
 
     cd "$tmp"
     url=$(gh pr list -R "$OWNER/$repo" --head "$branch" --state open --json url --jq '.[0].url // empty')
@@ -239,20 +316,12 @@ case "$cmd" in
     echo "$url"
     ;;
   new-repo)
-    [ $# -ge 1 ] || die "usage: new-repo <name> [description]"
-    name=$1 desc=${2:-}
-    valid_repo "$name" || die "bad repo name: $name"
-    cd /tmp
-    gh repo create "$OWNER/$name" --private --add-readme ${desc:+--description "$desc"} >/dev/null \
-      || die "could not create $OWNER/$name (exists already?)"
-    log "REPO-NEW $name"
-    for l in "${ISSUE_LABELS[@]}"; do ensure_label "$name" "$l"; done
-    echo "https://github.com/$OWNER/$name"
+    die "new-repo was removed: ask the owner to create the repo on github.com (private), then use it by name"
     ;;
   issue)
     [ $# -ge 2 ] || die "usage: issue <repo> <title> [labels]  (stdin: body)"
     [ $# -le 3 ] || die "too many arguments: $STDIN_HINT"
-    repo=$1 title=$2 labels=${3:-}
+    repo=${1,,} title=$2 labels=${3:-}
     valid_repo "$repo"   || die "bad repo name: $repo"
     valid_title "$title" || die "title empty, too long (max $MAX_TITLE) or has control characters"
     label_args=()
@@ -275,31 +344,58 @@ case "$cmd" in
     ;;
   issue-list)
     [ $# -ge 1 ] || die "usage: issue-list <repo> [label] [state]"
-    repo=$1 label=${2:-} state=${3:-open}
+    repo=${1,,} label=${2:-} state=${3:-open}
     valid_repo "$repo" || die "bad repo name: $repo"
     [ -z "$label" ] || [[ "$label" =~ ^[A-Za-z0-9:._-]{1,50}$ ]] || die "bad label: $label"
     [[ "$state" =~ ^(open|closed|all)$ ]] || die "state must be open, closed or all: $state"
     cd /tmp
-    gh issue list -R "$OWNER/$repo" --state "$state" --limit 100 ${label:+--label="$label"} \
+    repo_visibility "$repo"
+    author=(); [ "$REPO_PUBLIC" = 1 ] && author=(--author "$OWNER")   # public: only the owner's issues
+    gh issue list -R "$OWNER/$repo" --state "$state" --limit 100 ${label:+--label="$label"} "${author[@]}" \
       --json number,title,labels,url --jq '[.[] | {number, title, labels: [.labels[].name], url}]' \
       || die "could not list issues on $repo"
-    log "ISSUE-LIST $repo label=$label state=$state"
+    log "ISSUE-LIST $repo label=$label state=$state${author:+ owner-only}"
     ;;
   issue-view)
     [ $# -ge 2 ] || die "usage: issue-view <repo> <number>"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     cd /tmp
-    gh issue view "$n" -R "$OWNER/$repo" --json number,title,state,url,body,labels,comments \
-      --jq '{number, title, state, url, body, labels: [.labels[].name], comments: [.comments[] | {author: .author.login, createdAt, body}]}' \
-      || die "could not view $repo#$n"
-    log "ISSUE-VIEW $repo#$n"
+    repo_visibility "$repo"
+    if [ "$REPO_PUBLIC" = 1 ]; then
+      # public: the owner's issues only, and only the owner's comments on them
+      tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+      gh api "repos/$OWNER/$repo/issues/$n" > "$tmp/issue" || die "could not view $repo#$n"
+      gh api --paginate "repos/$OWNER/$repo/issues/$n/comments?per_page=100" > "$tmp/comments" || die "could not read the comments on $repo#$n"
+      rc=0; python3 -I -c "$OWNER_ONLY_PY" issue "$tmp/issue" "$tmp/comments" || rc=$?
+      [ "$rc" != 3 ] || die "refused: $repo is public and #$n wasn't opened by the owner; issues from anyone else aren't read"
+      [ "$rc" = 0 ] || die "could not read $repo#$n"
+      log "ISSUE-VIEW $repo#$n owner-only"
+    else
+      gh issue view "$n" -R "$OWNER/$repo" --json number,title,state,url,body,labels,comments \
+        --jq '{number, title, state, url, body, labels: [.labels[].name], comments: [.comments[] | {author: .author.login, createdAt, body}]}' \
+        || die "could not view $repo#$n"
+      log "ISSUE-VIEW $repo#$n"
+    fi
+    ;;
+  pr-comments)
+    [ $# -eq 2 ] || die "usage: pr-comments <repo> <number>"
+    repo=${1,,} n=$2
+    valid_repo "$repo" || die "bad repo name: $repo"
+    valid_number "$n"  || die "bad pull request number: $n"
+    cd /tmp
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    gh api --paginate "repos/$OWNER/$repo/pulls/$n/reviews?per_page=100" > "$tmp/reviews" || die "no pull request $repo#$n"
+    gh api --paginate "repos/$OWNER/$repo/pulls/$n/comments?per_page=100" > "$tmp/review-comments" || die "could not read review comments on $repo#$n"
+    gh api --paginate "repos/$OWNER/$repo/issues/$n/comments?per_page=100" > "$tmp/comments" || die "could not read comments on $repo#$n"
+    python3 -I -c "$OWNER_ONLY_PY" pr "$tmp/reviews" "$tmp/review-comments" "$tmp/comments" || die "could not read $repo#$n"
+    log "PR-COMMENTS $repo#$n"
     ;;
   issue-comment)
     [ $# -ge 2 ] || die "usage: issue-comment <repo> <number>  (stdin: comment)"
     [ $# -eq 2 ] || die "too many arguments: $STDIN_HINT"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     read_body comment
@@ -314,7 +410,7 @@ case "$cmd" in
     ;;
   issue-label)
     [ $# -ge 4 ] || die "usage: issue-label <repo> <number> <add|remove> <label>"
-    repo=$1 n=$2 op=$3 label=$4
+    repo=${1,,} n=$2 op=$3 label=$4
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     [[ "$op" =~ ^(add|remove)$ ]] || die "op must be add or remove: $op"
@@ -330,7 +426,7 @@ case "$cmd" in
   issue-close)
     [ $# -ge 2 ] || die "usage: issue-close <repo> <number>  (stdin: comment saying why, linking the PR)"
     [ $# -eq 2 ] || die "too many arguments: $STDIN_HINT"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     read_body "closing comment"
@@ -345,7 +441,7 @@ case "$cmd" in
     ;;
   issue-reopen)
     [ $# -ge 2 ] || die "usage: issue-reopen <repo> <number>"
-    repo=$1 n=$2
+    repo=${1,,} n=$2
     valid_repo "$repo" || die "bad repo name: $repo"
     valid_number "$n"  || die "bad issue number: $n"
     cd /tmp
@@ -358,7 +454,6 @@ case "$cmd" in
   *)
     cat >&2 <<'USAGE'
 usage: agent-git pr <repo> <branch> <title>          stdin: optional body, then the bundle
-       agent-git new-repo <name> [description]
        agent-git issue <repo> <title> [labels]       stdin: body; labels comma-separated
        agent-git issue-list <repo> [label] [state]   state: open (default), closed, all
        agent-git issue-view <repo> <number>
@@ -366,6 +461,7 @@ usage: agent-git pr <repo> <branch> <title>          stdin: optional body, then 
        agent-git issue-label <repo> <number> <add|remove> <label>
        agent-git issue-close <repo> <number>         stdin: comment (why, link the PR)
        agent-git issue-reopen <repo> <number>
+       agent-git pr-comments <repo> <number>         reviews and comments by the owner or the Claude review app
 bodies go on stdin in a single-quoted heredoc, e.g.
   sudo -u gitbot agent-git issue-comment <repo> <n> <<'EOF'
   text with `backticks` and $vars, kept as-is
@@ -376,6 +472,7 @@ pr: { cat <<'EOF'
   git bundle create - <branch>; } | sudo -u gitbot agent-git pr <repo> <branch> '<title>'
 labels: self-improvement claude-ready agent human-effort:low human-effort:med human-effort:high value:high value:med value:low bug enhancement
 public repos: writes are Claude Code (coder) only and are checked for secrets and personal details first
+public repos: reads return only what the owner wrote (pr-comments: also the Claude review app)
 USAGE
     exit 1 ;;
 esac
