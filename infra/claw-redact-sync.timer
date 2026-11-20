@@ -1,0 +1,9 @@
+[Unit]
+Description=Mirror redact.txt into the CI secret hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
