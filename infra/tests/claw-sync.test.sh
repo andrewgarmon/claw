@@ -4,6 +4,7 @@
 # Touches nothing outside a temp dir. Usage: bash infra/tests/claw-sync.test.sh
 set -uo pipefail
 SYNC=$(cd "$(dirname "$0")/.." && pwd)/claw-sync
+REPO=$(cd "$(dirname "$0")/../.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 export CLAW_SYNC_HOME=$T/home CLAW_SYNC_HEALTH_WAIT=0 CLAW_SYNC_IDLE_WAIT=0
 export CLAW_SYNC_FULL_EVERY=0   # every run is a full run, except in the idle fast-path tests at the end
@@ -48,6 +49,7 @@ chmod +x "$BIN"/*
 git init -q --bare -b main "$T/origin.git"
 git clone -q "$T/origin.git" "$T/dev" 2>/dev/null
 git -C "$T/dev" checkout -q -b main
+cp "$REPO/.gitignore" "$T/dev/.gitignore"   # the real one: what counts as untracked vs ignored state
 commit() {  # commit <openclaw.json content> [other file]
   echo "$1" > "$T/dev/openclaw.json"; [ -n "${2:-}" ] && echo "$RANDOM" > "$T/dev/$2"
   git -C "$T/dev" add -A && git -C "$T/dev" commit -qm "$1" && git -C "$T/dev" push -q origin main
@@ -75,7 +77,7 @@ not_bad() { ! grep -qx "$1" "$S/bad" 2>/dev/null; }
 run; check "idle + healthy: success ping, no restart" \
   eval '[ $rc = 0 ] && head_is $c1 && pinged "" "up to date" && restarts 0'
 
-c2=$(commit '{"v":1}' workspace.md)
+c2=$(commit '{"v":1}' README.md)
 run; check "non-config change: synced, no restart, success ping" \
   eval '[ $rc = 0 ] && head_is $c2 && restarts 0 && pinged "" "synced"'
 
@@ -209,7 +211,7 @@ run; check "idle within 5 min: no health check, no ping, no output" eval 'quiet'
 echo $(( $(date +%s) - 301 )) > "$S/last-full"
 run; check "idle after 5 min: full run with health check + ping" \
   eval '[ $rc = 0 ] && [ -s "$H/health" ] && pinged "" "up to date"'
-c18=$(commit '{"v":8}' workspace.md)
+c18=$(commit '{"v":8}' README.md)
 run; check "main moved within 5 min: synced + pinged" eval '[ $rc = 0 ] && head_is $c18 && pinged "" "synced"'
 c19=$(commit '{"v":19}')
 run; check "config change within 5 min: deployed" eval '[ $rc = 0 ] && head_is $c19 && restarts 1 && pinged "" "deployed"'
@@ -237,7 +239,7 @@ run; check "unhealthy full run: fail ping" eval '[ $rc = 1 ] && pinged /fail "no
 rm "$H/gw_down"
 run; check "after a failed full run: next run is full again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 run; check "then quiet again" eval 'quiet'
-touch "$H/gw_down"; c21=$(commit '{"v":20}' workspace.md)
+touch "$H/gw_down"; c21=$(commit '{"v":20}' README.md)
 run; check "failure within 5 min of a full run: fail ping" eval '[ $rc = 1 ] && head_is $c21 && pinged /fail "not healthy"'
 rm "$H/gw_down"
 run; check "next run after that failure is full, not quiet" eval '[ $rc = 0 ] && pinged "" "up to date"'
@@ -268,5 +270,71 @@ touch -d '27 hours ago' "$B"; c22=$(commit '{"v":22}')
 run; check "stale backup doesn't block a deploy" eval '[ $rc = 1 ] && head_is $c22 && restarts 1 && pinged /fail "27h"'
 touch "$B"; rm -f "$S/last-full"
 run; check "backup succeeds again: healthy" eval '[ $rc = 0 ] && pinged "" "up to date"'
+
+# Untracked files (neither tracked nor ignored) are removed and reported; ignored state is kept.
+O=$H/.openclaw; rm -f "$S/last-full"
+mkdir -p "$O/workspace/skills/new" "$O/skills/extra" "$O/workspace/memory" "$O/state-backup" "$O/workspace/.openclaw/extensions/x" "$O/agents"
+for f in workspace/BOOTSTRAP.md workspace/TOOLS.md workspace/skills/new/SKILL.md skills/extra/SKILL.md; do echo planted > "$O/$f"; done
+for f in workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backup/x workspace/.openclaw/extensions/x/index.ts agents/s.json; do echo state > "$O/$f"; done
+run; check "untracked files: removed, named in a fail ping, no restart" \
+  eval '[ $rc = 1 ] && restarts 0 && pinged /fail "untracked files removed: .*workspace/BOOTSTRAP.md" && pinged /fail "skills/extra/SKILL.md" && pinged /fail "workspace/skills/new/SKILL.md" && grep -q "removing untracked files" "$T/out"'
+check "untracked files are gone" eval '! ls "$O/workspace/BOOTSTRAP.md" "$O/workspace/TOOLS.md" "$O/workspace/skills/new" "$O/skills/extra" 2>/dev/null'
+check "ignored state is kept (.env, USER.md, MEMORY.md, memory/, state-backup/, workspace/.openclaw/, agents/)" \
+  eval 'for f in .env workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backup/x workspace/.openclaw/extensions/x/index.ts agents/s.json; do [ -e "$O/$f" ] || exit 1; done'
+run; check "after the cleanup: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
+echo planted > "$O/workspace/HEARTBEAT.md"
+run; check "untracked file within 5 min of a full run: not skipped as idle" \
+  eval '[ $rc = 1 ] && pinged /fail "untracked files removed: workspace/HEARTBEAT.md" && [ ! -e "$O/workspace/HEARTBEAT.md" ]'
+c23=$(commit '{"v":23}' README.md); echo planted > "$O/workspace/NEW.md"
+run; check "untracked file during a deploy: deployed, then the ping fails naming it" \
+  eval '[ $rc = 1 ] && head_is $c23 && restarts 1 && [ "$(cat "$S/good")" = $c23 ] && pinged /fail "untracked files removed: workspace/NEW.md"'
+mkdir -p "$T/dev/workspace" && echo new > "$T/dev/workspace/LATER.md" && git -C "$T/dev" add -A && git -C "$T/dev" commit -qm later && git -C "$T/dev" push -q origin main
+echo local > "$O/workspace/LATER.md"
+run; check "a local file the new commit tracks: overwritten by the sync, not reported as removed" \
+  eval '[ $rc = 0 ] && [ "$(cat "$O/workspace/LATER.md")" = new ] && ! pinged /fail ""'
+# excludes the agent's user can write don't hide anything: a nested .gitignore, .git/info/exclude,
+# core.excludesFile. Only the committed root .gitignore counts.
+mkdir -p "$O/workspace/skills/evil" "$O/.git/info"
+echo planted > "$O/workspace/skills/evil/SKILL.md"; echo '*' > "$O/workspace/skills/evil/.gitignore"
+echo planted > "$O/workspace/HIDDEN.md"; echo 'workspace/HIDDEN.md' >> "$O/.git/info/exclude"
+echo planted > "$O/workspace/ALSO.md"; echo 'workspace/ALSO.md' > "$T/excludes"; git -C "$O" config core.excludesFile "$T/excludes"
+rm -f "$S/last-full"
+run; check "a planted nested .gitignore, info/exclude or core.excludesFile hides nothing: all removed and named" \
+  eval '[ $rc = 1 ] && pinged /fail "workspace/skills/evil/SKILL.md" && pinged /fail "workspace/HIDDEN.md" && pinged /fail "workspace/ALSO.md" && [ ! -e "$O/workspace/skills/evil" ] && [ ! -e "$O/workspace/HIDDEN.md" ] && [ ! -e "$O/workspace/ALSO.md" ]'
+check "the emptied directory is gone, its tracked parent stays" eval '[ ! -e "$O/workspace/skills/evil" ] && [ -d "$O/workspace" ]'
+git -C "$O" config --unset core.excludesFile; : > "$O/.git/info/exclude"
+for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
+run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
+
+# Python bytecode is only ignored under infra/: a .pyc in a skill folder could run in place of its .py
+mkdir -p "$O/skills/extra/__pycache__" "$O/infra/x/__pycache__"
+echo planted > "$O/skills/extra/__pycache__/run.cpython-312.pyc"; echo planted > "$O/skills/extra/run.pyc"
+echo junk > "$O/infra/x/__pycache__/t.cpython-312.pyc"
+run; check "a .pyc outside infra/: removed and named; infra/ bytecode is ignored" \
+  eval '[ $rc = 1 ] && pinged /fail "skills/extra/__pycache__/run.cpython-312.pyc" && pinged /fail "skills/extra/run.pyc" && [ ! -e "$O/skills/extra" ] && [ -e "$O/infra/x/__pycache__/t.cpython-312.pyc" ] && ! pinged /fail "infra/x"'
+
+# assume-unchanged / skip-worktree hide an in-place edit from git diff: still reverted, and the ping says so
+git -C "$O" update-index --assume-unchanged openclaw.json; echo '{"v":"edited"}' > "$O/openclaw.json"
+git -C "$O" update-index --skip-worktree README.md; echo edited > "$O/README.md"
+rm -f "$S/last-full"
+run; check "edits hidden with assume-unchanged/skip-worktree: reverted, flags cleared, fail ping names them" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git.*openclaw.json" && pinged /fail "README.md" && [ "$(cat "$O/openclaw.json")" != "{\"v\":\"edited\"}" ] && [ "$(cat "$O/README.md")" != edited ] && ! git -C "$O" ls-files -v | grep -q "^[a-zS] "'
+run; check "after that: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
+git -C "$O" update-index --assume-unchanged README.md
+run; check "a flag alone (no edit) still counts: not skipped as idle, cleared" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git" && ! git -C "$O" ls-files -v | grep -q "^[a-z] "'
+
+# Broken ignore rules fail closed: nothing is synced or removed, so state is never deleted
+echo planted > "$O/workspace/PLANTED.md"; good_head=$(git -C "$O" rev-parse HEAD)
+git -C "$T/dev" rm -q .gitignore && git -C "$T/dev" commit -qm "no gitignore" && git -C "$T/dev" push -q origin main
+run; check "main without a .gitignore: not synced, nothing removed, fail ping" \
+  eval '[ $rc = 1 ] && head_is $good_head && pinged /fail "has no .gitignore" && [ -e "$O/workspace/PLANTED.md" ] && [ -e "$O/.env" ] && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/agents/s.json" ]'
+cp "$REPO/.gitignore" "$T/dev/.gitignore"; sed -i '/^workspace\/USER.md$/d' "$T/dev/.gitignore"
+git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore drops state" && git -C "$T/dev" push -q origin main
+run; check "main whose .gitignore stops covering state: not synced, nothing removed, fail ping names it" \
+  eval '[ $rc = 1 ] && head_is $good_head && pinged /fail "never be removed (workspace/USER.md )" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/workspace/USER.md" ] && [ -e "$O/workspace/PLANTED.md" ]'
+cp "$REPO/.gitignore" "$T/dev/.gitignore"; git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore back" && git -C "$T/dev" push -q origin main
+run; check "ignore rules fixed: synced, the planted file removed, state kept" \
+  eval '[ $rc = 1 ] && head_is "$(git -C "$T/dev" rev-parse HEAD)" && pinged /fail "untracked files removed: workspace/PLANTED.md" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/.env" ]'
 
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }
