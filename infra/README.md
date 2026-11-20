@@ -103,7 +103,7 @@ Check it once the public repo exists: ask Claude Code to file an issue on it wit
 The two checks match differently. agent-git looks only at what a push adds and matches inside words. CI greps the whole tree for whole words. So a word in `redact.txt` that the repo legitimately contains, such as your GitHub username in URLs, turns every PR red, even though agent-git never tripped on it. **Before turning it on**, check the list against the repo the way CI does, against file contents and file paths. You're clear when it prints `file contents:`, `  none`, `file paths: 0` and `check ran`. A file name with a count, or a number above 0, means the repo contains a listed word. If it doesn't end with `check ran`, the check failed and proved nothing:
 ```bash
 ( set -eo pipefail; export LC_ALL=C.UTF-8; l=$(mktemp); d=$(mktemp -d); trap 'rm -rf "$l" "$d"' EXIT
-  sudo sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e '/^#/d' /home/gitbot/.config/redact.txt > "$l"
+  sudo -u gitbot cat /home/gitbot/.config/redact.txt | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e '/^#/d' > "$l"
   [ -s "$l" ] || { echo "redact.txt is empty or unreadable: nothing checked"; exit 1; }
   git clone -q --depth 1 https://github.com/andrewgarmon/claw.git "$d/r"
   echo "file contents:"; rc=0; git -C "$d/r" grep -c -i -w -F -I -f "$l" || rc=$?
