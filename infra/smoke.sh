@@ -198,6 +198,36 @@ PY
   PASS plugins
 }
 
+# 8. Tools: the deployed openclaw.json keeps the main agent off the shell (group:runtime and the
+#    gateway tool denied, file tools limited to the workspace, no cron or skill_workshop) and allows
+#    every tool the installed claw-tools plugin declares. Reads config and manifest only.
+check_tools() {
+  local bad
+  [ -f "$OC_PLUGINS/claw-tools/openclaw.plugin.json" ] || { SKIP tools "claw-tools isn't installed (sudo claw-install)"; return; }
+  # shellcheck disable=SC2024  # on purpose: openclaw reads its file, root writes its own temp copy
+  sudo -n -u openclaw cat "$OC_HOME/.openclaw/openclaw.json" > "$OUT/cfg" 2>/dev/null || { FAIL tools "can't read openclaw.json"; return; }
+  bad=$(python3 -I - "$OUT/cfg" "$OC_PLUGINS/claw-tools/openclaw.plugin.json" <<'PY'
+import json, re, sys
+try:
+    tools = json.load(open(sys.argv[1])).get("tools", {})
+    declared = json.load(open(sys.argv[2]))["contracts"]["tools"]
+except Exception:
+    print("unreadable openclaw.json or claw-tools manifest"); sys.exit()
+out = []
+deny = set(tools.get("deny") or [])
+missing = [d for d in ("group:runtime", "gateway", "cron", "skill_workshop") if d not in deny]
+if missing: out.append("not denied: " + ", ".join(missing))
+if (tools.get("fs") or {}).get("workspaceOnly") is not True: out.append("tools.fs.workspaceOnly isn't true")
+allowed = set(tools.get("alsoAllow") or []) | set(tools.get("allow") or [])
+gone = [t for t in declared if isinstance(t, str) and re.fullmatch(r"[a-z0-9_]{1,64}", t) and t not in allowed]
+if gone: out.append("claw-tools tools not allowed: " + ", ".join(gone))
+print("; ".join(out))
+PY
+)
+  [ -z "$bad" ] || { FAIL tools "$bad"; return; }
+  PASS tools
+}
+
 check_acp
 check_usage
 check_git_token
@@ -211,6 +241,7 @@ check_git_refusals
 check_timers
 check_gateway
 check_plugins
+check_tools
 check_cal
 
 if [ "$fail" = 0 ]; then

@@ -86,7 +86,12 @@ for id in "${ids[@]}"; do
   check "$id: hooks.allowPromptInjection is false" eval 'jq -e --arg i "$id" ".plugins.entries[\$i].hooks.allowPromptInjection == false" "$CFG" >/dev/null'
   check "$id: exactly one load path, under /usr/local/lib/claw/openclaw-plugins/$id/" \
     eval '[ "$(jq -r --arg p "/usr/local/lib/claw/openclaw-plugins/$id" ".plugins.load.paths[] | select(. == \$p or startswith(\$p + \"/\"))" "$CFG" | wc -l)" = 1 ]'
-  if [ -f "infra/openclaw-plugins/$id/package-lock.json" ]; then
+  if jq -e '.openclaw' "infra/openclaw-plugins/$id/package.json" >/dev/null 2>&1; then
+    check "$id: a source plugin is loaded from its own dir, with exact dependency versions" \
+      eval 'jq -e --arg p "/usr/local/lib/claw/openclaw-plugins/$id" ".plugins.load.paths | index(\$p)" "$CFG" >/dev/null &&
+            jq -e "[.dependencies // {} | .[] | test(\"^[0-9]+(\\\\.[0-9]+)*$\")] | all" "infra/openclaw-plugins/$id/package.json" >/dev/null &&
+            { [ -z "$(jq -r ".dependencies // {} | keys[]" "infra/openclaw-plugins/$id/package.json")" ] || [ -f "infra/openclaw-plugins/$id/package-lock.json" ]; }'
+  elif [ -f "infra/openclaw-plugins/$id/package-lock.json" ]; then
     check "$id: the load path is node_modules/<the pinned package>, at an exact version" \
       eval 'pkg=$(jq -r ".dependencies | keys[0]" "infra/openclaw-plugins/$id/package.json"); ver=$(jq -r ".dependencies[\"$pkg\"]" "infra/openclaw-plugins/$id/package.json");
             [[ $ver =~ ^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$ ]] && jq -e --arg p "/usr/local/lib/claw/openclaw-plugins/$id/node_modules/$pkg" ".plugins.load.paths | index(\$p)" "$CFG" >/dev/null'

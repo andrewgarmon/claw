@@ -84,6 +84,7 @@
       "bonjour",
       "browser",
       "canvas",
+      "claw-tools",
       "clawrouter",
       "cloudflare",
       "code-mode-quickjs",
@@ -144,7 +145,8 @@
     ],
     "load": {
       "paths": [
-        "/usr/local/lib/claw/openclaw-plugins/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"
+        "/usr/local/lib/claw/openclaw-plugins/duckduckgo/node_modules/@openclaw/duckduckgo-plugin",
+        "/usr/local/lib/claw/openclaw-plugins/claw-tools"
       ]
     },
     "entries": {
@@ -193,6 +195,12 @@
             }
           }
         }
+      },
+      "claw-tools": {
+        "enabled": true,
+        "hooks": {
+          "allowPromptInjection": false
+        }
       }
     }
   },
@@ -230,7 +238,22 @@
     "profile": "coding",
     "alsoAllow": [
       "message",
-      "pdf"
+      "pdf",
+      "calendar_list_calendars",
+      "calendar_events",
+      "calendar_create",
+      "calendar_update",
+      "calendar_delete",
+      "calendar_undo",
+      "calendar_changes",
+      "github_issue_list",
+      "github_issue_view",
+      "github_issue_create",
+      "github_issue_comment",
+      "github_issue_label",
+      "github_issue_close",
+      "github_issue_reopen",
+      "claude_usage"
     ],
     "deny": [
       "image_generate",
@@ -245,8 +268,13 @@
       "plugins",
       "secrets",
       "skill_workshop",
-      "cron"
+      "cron",
+      "group:runtime",
+      "gateway"
     ],
+    "fs": {
+      "workspaceOnly": true
+    },
     "web": {
       "search": {
         "provider": "duckduckgo",
@@ -255,10 +283,7 @@
     }
   },
   "skills": {
-    "allowBundled": [
-      "github",
-      "gh-issues"
-    ],
+    "allowBundled": [],
     "entries": {
       "add-model-provider": {
         "enabled": false

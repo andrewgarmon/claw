@@ -109,9 +109,10 @@ case "\$*" in
 esac
 EOF
 # root-owned plugin dir with duckduckgo; the registry reports it enabled from there
-mkdir -p "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" "$T/ocp/leftover.new"
+mkdir -p "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin" "$T/ocp/leftover.new" "$T/ocp/claw-tools"
+echo '{"id":"claw-tools","contracts":{"tools":["calendar_events","claude_usage"]}}' > "$T/ocp/claw-tools/openclaw.plugin.json"
 plugins_json() {  # plugins_json <duckduckgo rootDir> [extra plugin JSON objects, comma-led]
-  printf '{"workspaceDir":"/x","plugins":[{"id":"telegram","enabled":true,"origin":"bundled","rootDir":"/b/telegram"},{"id":"duckduckgo","enabled":true,"origin":"config","rootDir":"%s"}%s]}\n' "$1" "${2:-}" > "$T/plugins.json"
+  printf '{"workspaceDir":"/x","plugins":[{"id":"telegram","enabled":true,"origin":"bundled","rootDir":"/b/telegram"},{"id":"duckduckgo","enabled":true,"origin":"config","rootDir":"%s"},{"id":"claw-tools","enabled":true,"origin":"config","rootDir":"'"$T"'/ocp/claw-tools"}%s]}\n' "$1" "${2:-}" > "$T/plugins.json"
 }
 plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"
 chmod +x "$BIN"/* "$OC/.npm-global/bin/openclaw"
@@ -119,7 +120,7 @@ chmod +x "$BIN"/* "$OC/.npm-global/bin/openclaw"
 # ~/.openclaw: a clone of a scratch origin, so HEAD vs origin/main can be checked
 git init -q --bare -b main "$T/origin.git"
 git clone -q "$T/origin.git" "$T/dev" 2>/dev/null
-echo '{"plugins":{"allow":["duckduckgo","telegram"]}}' > "$T/dev/openclaw.json"
+echo '{"plugins":{"allow":["duckduckgo","telegram","claw-tools"]},"tools":{"alsoAllow":["calendar_events","claude_usage"],"deny":["group:runtime","gateway","cron","skill_workshop"],"fs":{"workspaceOnly":true}}}' > "$T/dev/openclaw.json"
 git -C "$T/dev" checkout -q -b main && git -C "$T/dev" add -A && git -C "$T/dev" commit -q -m one && git -C "$T/dev" push -q origin main 2>/dev/null
 git clone -q "$T/origin.git" "$OC/.openclaw"
 echo "APPLE_ID=x" > "$T/calbot/caldav.env"
@@ -134,7 +135,7 @@ says() { grep -q -- "$1" "$T/out"; }   # basic regex: "." stands in for apostrop
 
 run
 check "all good: every check passes, exit 0" \
-  eval '[ $rc = 0 ] && says "PASS acp-adapter" && says "PASS agent-git-token" && says "PASS agent-git-refusals" && says "PASS timers" && says "PASS gateway" && says "PASS agent-cal" && says "PASS claude-usage" && says "PASS plugins" && says "all 8 checks passed"'
+  eval '[ $rc = 0 ] && says "PASS acp-adapter" && says "PASS agent-git-token" && says "PASS agent-git-refusals" && says "PASS timers" && says "PASS gateway" && says "PASS agent-cal" && says "PASS claude-usage" && says "PASS plugins" && says "PASS tools" && says "all 9 checks passed"'
 check "ACP adapter runs as openclaw -> coder, the way acpx does" eval 'grep -q "^openclaw -> coder: $BIN/coder-acp" "$T/sudo.log"'
 check "claude-usage runs as openclaw -> coder, fresh" eval 'grep -q "^openclaw -> coder: $BIN/claude-usage" "$T/sudo.log"'
 check "refusals are tried as coder and as openclaw, never as root" \
@@ -144,7 +145,7 @@ check "records the refusal checks' window for claw-denywatch" eval 'tail -n1 "$T
 
 echo 0.106.0 > "$T/acp_version"
 run; check "wrong adapter version: FAIL with both versions, exit 1" \
-  eval '[ $rc = 1 ] && says "FAIL acp-adapter: adapter is 0.106.0 but the lockfile pins 0.107.3" && says "1 of 8 checks FAILED"'
+  eval '[ $rc = 1 ] && says "FAIL acp-adapter: adapter is 0.106.0 but the lockfile pins 0.107.3" && says "1 of 9 checks FAILED"'
 echo '1.0; rm -rf /' > "$T/acp_version"
 run; check "odd version string isn't echoed" eval '[ $rc = 1 ] && says "no usable agent version" && ! says "rm -rf"'
 rm "$T/acp_version"
@@ -161,7 +162,7 @@ mv "$T/lib/lock.bak" "$T/lib/package-lock.json"
 
 touch "$T/usage_unavailable"
 run; check "claude-usage without plan limits (exit 3): SKIP, still passes" \
-  eval '[ $rc = 0 ] && says "SKIP claude-usage: plan limits unavailable" && says "all 7 checks passed (1 skipped)"'
+  eval '[ $rc = 0 ] && says "SKIP claude-usage: plan limits unavailable" && says "all 8 checks passed (1 skipped)"'
 rm "$T/usage_unavailable"; touch "$T/usage_bad"
 run; check "claude-usage without a weekly number: FAIL" eval '[ $rc = 1 ] && says "FAIL claude-usage: no usable answer (exit 0)"'
 rm "$T/usage_bad"; chmod -x "$BIN/claude-usage"
@@ -196,14 +197,14 @@ rm "$T/gw_down"
 touch "$T/cal_bad"
 run; check "calendar password broken: FAIL" eval '[ $rc = 1 ] && says "FAIL agent-cal: listing calendars failed"'
 rm "$T/cal_bad" "$T/calbot/caldav.env"
-run; check "no CalDAV secret: SKIP, still passes" eval '[ $rc = 0 ] && says "SKIP agent-cal: no CalDAV secret yet" && says "all 7 checks passed (1 skipped)"'
+run; check "no CalDAV secret: SKIP, still passes" eval '[ $rc = 0 ] && says "SKIP agent-cal: no CalDAV secret yet" && says "all 8 checks passed (1 skipped)"'
 mv "$BIN/agent-cal" "$T/agent-cal.off"
 run; check "cal broker not installed: SKIP" eval '[ $rc = 0 ] && says "SKIP agent-cal: broker not installed"'
 mv "$T/agent-cal.off" "$BIN/agent-cal"
 
 touch "$T/token_bad" "$T/gw_down"
 run; check "several failures: each listed, count in the last line" \
-  eval '[ $rc = 1 ] && says "FAIL agent-git-token" && says "FAIL gateway" && [ "$(tail -n1 "$T/out")" = "claw-smoke: 2 of 7 checks FAILED" ]'
+  eval '[ $rc = 1 ] && says "FAIL agent-git-token" && says "FAIL gateway" && [ "$(tail -n1 "$T/out")" = "claw-smoke: 2 of 8 checks FAILED" ]'
 rm "$T/token_bad" "$T/gw_down"
 
 # plugins
@@ -237,6 +238,17 @@ plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"; touch
 run; check "plugins list fails: FAIL" eval '[ $rc = 1 ] && says "FAIL plugins: openclaw plugins list failed"'
 rm "$T/plugins_fail"
 run; check "plugins back to normal: PASS (a leftover .new dir is ignored)" eval '[ $rc = 0 ] && says "PASS plugins"'
+
+# tools
+cfg() { echo "$1" > "$T/dev/openclaw.json"; git -C "$T/dev" commit -qam cfg && git -C "$T/dev" push -q origin main 2>/dev/null && git -C "$OC/.openclaw" pull -q --ff-only 2>/dev/null; }
+cfg '{"plugins":{"allow":["duckduckgo","telegram","claw-tools"]},"tools":{"alsoAllow":["calendar_events"],"deny":["gateway","cron","skill_workshop"]}}'
+run; check "tools: shell not denied, fs not workspace-only, a claw-tools tool not allowed: FAIL naming each" \
+  eval '[ $rc = 1 ] && says "FAIL tools: not denied: group:runtime; tools.fs.workspaceOnly isn.t true; claw-tools tools not allowed: claude_usage"'
+cfg '{"plugins":{"allow":["duckduckgo","telegram","claw-tools"]},"tools":{"alsoAllow":["calendar_events","claude_usage"],"deny":["group:runtime","gateway","cron","skill_workshop"],"fs":{"workspaceOnly":true}}}'
+run; check "tools: all set: PASS" eval '[ $rc = 0 ] && says "PASS tools"'
+mv "$T/ocp/claw-tools" "$T/claw-tools.off"; plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"
+run; check "tools: claw-tools not installed yet: SKIP" eval '[ $rc = 0 ] && says "SKIP tools: claw-tools isn.t installed"'
+mv "$T/claw-tools.off" "$T/ocp/claw-tools"
 
 printf '#!/bin/bash\necho 1000\n' > "$BIN/id"
 run; check "not root: refused" eval '[ $rc = 1 ] && says "run with sudo" && [ ! -s "$T/sudo.log" ]'

@@ -1,0 +1,14 @@
+{
+  "name": "claw-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed tools for the calendar and GitHub brokers. Installed root-owned by claw-install; loaded through plugins.load.paths.",
+  "dependencies": {
+    "typebox": "1.3.35"
+  },
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "compat": { "pluginApi": ">=2026.11.3" }
+  }
+}
