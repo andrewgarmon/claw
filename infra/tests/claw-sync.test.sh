@@ -315,6 +315,13 @@ echo x > "$O/workspace/big.md"
 CLAW_SYNC_REMOVED_MAX_MB=0 run
 check "removed/ over its size cap: deleted instead of moved, and the ping says so" \
   eval '[ $rc = 1 ] && [ ! -e "$O/workspace/big.md" ] && ! ls "$S"/removed/*/workspace/big.md 2>/dev/null && pinged /fail "big.md.*over 0 MB, so these were deleted"'
+mv "$S/removed" "$T/removed.bak"; touch "$S/removed"; echo x > "$O/workspace/blocked.md"
+run; check "removed/ planted as a file: no crash, files deleted instead, the ping says so" \
+  eval '[ $rc = 1 ] && [ ! -e "$O/workspace/blocked.md" ] && pinged /fail "blocked.md.*isn.t a usable directory, so these were deleted" && ! pinged /fail "crashed"'
+rm -f "$S/removed"; mkdir -p "$T/elsewhere"; ln -s "$T/elsewhere" "$S/removed"; echo x > "$O/workspace/linked.md"
+run; check "removed/ planted as a symlink: not followed, files deleted instead" \
+  eval '[ $rc = 1 ] && [ ! -e "$O/workspace/linked.md" ] && [ -z "$(ls -A "$T/elsewhere")" ] && pinged /fail "isn.t a usable directory" && ! pinged /fail "crashed"'
+rm -f "$S/removed"; mv "$T/removed.bak" "$S/removed"
 
 # Python bytecode is only ignored under infra/: a .pyc in a skill folder could run in place of its .py
 mkdir -p "$O/skills/extra/__pycache__" "$O/infra/x/__pycache__"

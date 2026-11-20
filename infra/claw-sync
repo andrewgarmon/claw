@@ -293,21 +293,26 @@ if [ -n "$left" ]; then
   # moved, not deleted, so a file that should have been kept (one never committed, say) can be put
   # back: $REMOVED/<time>/<its path>, outside ~/.openclaw, so nothing there is loaded. Kept
   # $REMOVED_DAYS days.
-  mkdir -p "$REMOVED"
-  find "$REMOVED" -mindepth 1 -maxdepth 1 -mtime +"$REMOVED_DAYS" -exec rm -rf -- {} + 2>/dev/null || true
-  # size cap, so something that recreates a big file every minute can't fill the disk
-  if [ "$(du -sm "$REMOVED" 2>/dev/null | cut -f1)" -lt "$REMOVED_MAX_MB" ] 2>/dev/null; then
-    moved_to=$(mktemp -d "$REMOVED/$(date +%Y%m%dT%H%M%S).XXXX")
-  else
-    moved_to="nowhere: $REMOVED is over ${REMOVED_MAX_MB} MB, so these were deleted"
+  # Nothing here may stop the run (it's after the reset, before validate): if the directory can't be
+  # set up (disk full, or the agent's user put a file or symlink at $REMOVED), the files are deleted.
+  # The size cap is checked before this run's move, so it's a soft limit; it stops something that
+  # recreates a big file every minute from filling the disk.
+  moved_to="nowhere: $REMOVED isn't a usable directory, so these were deleted"
+  if [ ! -L "$REMOVED" ] && mkdir -p "$REMOVED" 2>/dev/null && [ -d "$REMOVED" ]; then
+    find "$REMOVED" -mindepth 1 -maxdepth 1 -mtime +"$REMOVED_DAYS" -exec rm -rf -- {} + 2>/dev/null || true
+    if [ "$(du -sm "$REMOVED" 2>/dev/null | cut -f1)" -lt "$REMOVED_MAX_MB" ] 2>/dev/null; then
+      moved_to=$(mktemp -d "$REMOVED/$(date +%Y%m%dT%H%M%S).XXXX" 2>/dev/null) \
+        || moved_to="nowhere: couldn't create a directory in $REMOVED, so these were deleted"
+    else
+      moved_to="nowhere: $REMOVED is over ${REMOVED_MAX_MB} MB, so these were deleted"
+    fi
   fi
   echo "removing untracked files (moving them to $moved_to): $removed" >&2
   # exactly those paths (not git clean, which would honour the excludes ignored above); then any
   # directory left empty, up to the first one that isn't
   while IFS= read -r -d '' f; do
-    if [ -d "$moved_to" ]; then
-      mkdir -p -- "$moved_to/$(dirname -- "${f%/}")"
-      mv -f -- "$f" "$moved_to/${f%/}" 2>/dev/null || rm -rf -- "$f"   # never leave it in place
+    if [ -d "$moved_to" ]; then   # never leave it in place: if the move fails, delete it
+      { mkdir -p -- "$moved_to/$(dirname -- "${f%/}")" && mv -f -- "$f" "$moved_to/${f%/}"; } 2>/dev/null || rm -rf -- "$f"
     else
       rm -rf -- "$f"
     fi
