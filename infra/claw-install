@@ -49,16 +49,16 @@ confirm() {  # confirm <repo> <sha> <last>: show what changed in infra/, ask y/n
   echo "origin/main: $(git -C "$r" log -1 --format='%h %s (%cr)' "$sha")"
   if [ -z "$last" ]; then
     echo "no previous install recorded; installing all of infra/:"
-    git -C "$r" ls-tree -r --name-only "$sha" -- infra/ | sed 's/^/  /'
+    git -C "$r" ls-tree -r --name-only "$sha" -- infra/ backup.age.pub | sed 's/^/  /'
   elif [ "$last" = "$sha" ]; then
     echo "already installed at this commit (re-running is safe)"
   elif git -C "$r" cat-file -e "$last^{commit}" 2>/dev/null; then
-    echo "infra/ changes since the last install (${last:0:7}):"
-    git -C "$r" --no-pager log --format='  %h %s' "$last..$sha" -- infra/
-    git -C "$r" --no-pager diff --stat "$last" "$sha" -- infra/ | sed 's/^/  /'
+    echo "infra/ (and backup.age.pub) changes since the last install (${last:0:7}):"
+    git -C "$r" --no-pager log --format='  %h %s' "$last..$sha" -- infra/ backup.age.pub
+    git -C "$r" --no-pager diff --stat "$last" "$sha" -- infra/ backup.age.pub | sed 's/^/  /'
     # commit subjects are written by agents; the diff is what root will run, so show all of it first
     if [ "$YES" != 1 ] && [ -t 0 ]; then
-      git -C "$r" -c color.ui=always diff "$last" "$sha" -- infra/ | page
+      git -C "$r" -c color.ui=always diff "$last" "$sha" -- infra/ backup.age.pub | page
     fi
   else
     echo "last installed commit ${last:0:7} isn't in origin/main's history (force push?); review all of infra/"
@@ -71,7 +71,7 @@ confirm() {  # confirm <repo> <sha> <last>: show what changed in infra/, ask y/n
       y|Y|yes) return 0 ;;
       d|D)
         if [ -n "$last" ] && [ "$last" != "$sha" ] && git -C "$r" cat-file -e "$last^{commit}" 2>/dev/null; then
-          git -C "$r" -c color.ui=always diff "$last" "$sha" -- infra/ | page
+          git -C "$r" -c color.ui=always diff "$last" "$sha" -- infra/ backup.age.pub | page
         else
           git -C "$r" -c color.ui=always show "$sha:infra/install.sh" | page
         fi ;;

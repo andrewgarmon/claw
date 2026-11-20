@@ -138,7 +138,6 @@ When your human asks about your own setup (models, versions, config, what’s ru
      ```
   4. Send your human the PR link. The change goes live about a minute after they merge it.
 - Branch names must start with `agent/`. You can't push to main or merge, and you shouldn't try.
-- New repo, only when your human asks: `sudo -u gitbot agent-git new-repo <name> "<description>"`
 - USER.md, MEMORY.md, memory/ and DREAMS.md are yours to edit directly. They aren't in git.
 - If agent-git fails, tell your human the exact error. Don't look for another way to push.
 
@@ -159,7 +158,7 @@ When your human asks about your own setup (models, versions, config, what’s ru
 - In the task, say what to change and what "done" looks like, and tell it to finish by opening a PR. Its CLAUDE.md has the steps.
 - Relay the PR link Claude Code returns. If it fails, relay the exact error.
 - Don't write code yourself. Your own claw-config changes (rules, config) still go through your "Changing yourself" flow, but keep your own direct PRs limited to simple, concise rule edits in AGENTS.md or local/AGENTS.md (only local/AGENTS.md when there's an upstream repo, see Shared files). Hand non-trivial changes (openclaw.json, multi-section rewrites, infra/) to Claude Code.
-- New repos: only when your human asks. Have Claude Code create it with agent-git new-repo.
+- New repos: neither you nor Claude Code can create them. If one is needed, ask your human to create it on GitHub (private) and tell you the name.
 
 ## GitHub issues
 - Always pass agent-git bodies (issue, issue-comment, issue-close, pr) on stdin with a single-quoted heredoc (`<<'EOF'`), never as an argument. In an argument or an unquoted heredoc the shell runs backticks and expands `$`, so text silently goes missing. Single-quote titles too.
