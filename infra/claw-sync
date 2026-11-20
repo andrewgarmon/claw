@@ -19,7 +19,7 @@
 # - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
 #   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
 #   was under $FULL_EVERY seconds ago. So health checks and pings still happen about every 5 minutes.
-# - a healthy full run also checks whether origin/main has infra/ commits newer than the one
+# - a full run with a healthy gateway also checks whether origin/main has infra/ commits newer than the one
 #   claw-install last installed (that's manual, on purpose): it writes $STATE/infra-pending and tells
 #   the owner once on Telegram. Never a /fail: it isn't an outage.
 set -eEuo pipefail
@@ -61,7 +61,8 @@ backup_stale() {
 # when origin/main has infra/ changes claw-install hasn't installed, else remove it, and send the owner
 # one Telegram message per new infra/ commit: merges that don't touch infra/ don't repeat it (one
 # message in all while the installed commit is unknown).
-# Runs only on a healthy full run (the message goes through the gateway). Any failure here is logged
+# Runs at the start of ok(), i.e. on every full run whose gateway is healthy (even one that then fails
+# its ping for a bad main or a stale backup; the message goes through the gateway). Any failure here is logged
 # and ignored: the run's result never depends on it.
 infra_pending() {
   local inst="" key subjects owner msg
