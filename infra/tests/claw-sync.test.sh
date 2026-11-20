@@ -281,6 +281,8 @@ for f in workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backu
 run; check "untracked files: removed, named in a fail ping, no restart" \
   eval '[ $rc = 1 ] && restarts 0 && pinged /fail "untracked files removed: .*workspace/BOOTSTRAP.md" && pinged /fail "skills/extra/SKILL.md" && pinged /fail "workspace/skills/new/SKILL.md" && grep -q "removing untracked files" "$T/out"'
 check "untracked files are gone" eval '! ls "$O/workspace/BOOTSTRAP.md" "$O/workspace/TOOLS.md" "$O/workspace/skills/new" "$O/skills/extra" 2>/dev/null'
+check "... moved, not deleted: under removed/<time>/ with their paths, named in the ping" \
+  eval 'q=$(ls -d "$S"/removed/*/ | tail -n1) && [ "$(cat "$q/workspace/BOOTSTRAP.md")" = planted ] && [ -e "$q/workspace/skills/new/SKILL.md" ] && [ -e "$q/skills/extra/SKILL.md" ] && pinged /fail "moved to $S/removed/"'
 check "ignored state is kept (.env, USER.md, MEMORY.md, memory/, state-backup/, workspace/.openclaw/, agents/)" \
   eval 'for f in .env workspace/USER.md workspace/MEMORY.md workspace/memory/x.md state-backup/x workspace/.openclaw/extensions/x/index.ts agents/s.json; do [ -e "$O/$f" ] || exit 1; done'
 run; check "after the cleanup: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
@@ -305,8 +307,14 @@ run; check "a planted nested .gitignore, info/exclude or core.excludesFile hides
   eval '[ $rc = 1 ] && pinged /fail "workspace/skills/evil/SKILL.md" && pinged /fail "workspace/HIDDEN.md" && pinged /fail "workspace/ALSO.md" && [ ! -e "$O/workspace/skills/evil" ] && [ ! -e "$O/workspace/HIDDEN.md" ] && [ ! -e "$O/workspace/ALSO.md" ]'
 check "the emptied directory is gone, its tracked parent stays" eval '[ ! -e "$O/workspace/skills/evil" ] && [ -d "$O/workspace" ]'
 git -C "$O" config --unset core.excludesFile; : > "$O/.git/info/exclude"
+mkdir -p "$S/removed/20000101T000000/workspace" && touch -d '40 days ago' "$S/removed/20000101T000000"
 for i in $(seq 1 25); do echo x > "$O/workspace/n$i.md"; done
 run; check "many untracked files: the ping lists 20 and counts the rest" eval '[ $rc = 1 ] && pinged /fail "(and 5 more)"'
+check "moved files older than 30 days are pruned on the next removal" eval '[ ! -e "$S/removed/20000101T000000" ]'
+echo x > "$O/workspace/big.md"
+CLAW_SYNC_REMOVED_MAX_MB=0 run
+check "removed/ over its size cap: deleted instead of moved, and the ping says so" \
+  eval '[ $rc = 1 ] && [ ! -e "$O/workspace/big.md" ] && ! ls "$S"/removed/*/workspace/big.md 2>/dev/null && pinged /fail "big.md.*over 0 MB, so these were deleted"'
 
 # Python bytecode is only ignored under infra/: a .pyc in a skill folder could run in place of its .py
 mkdir -p "$O/skills/extra/__pycache__" "$O/infra/x/__pycache__"
