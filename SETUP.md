@@ -102,7 +102,7 @@ sudo -iu openclaw bash -c 'ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519 -
 ```bash
 sudo -iu openclaw bash -c 'ssh-keyscan -q github.com >> ~/.ssh/known_hosts && cd ~/.openclaw && git init -q -b main && git remote add origin git@github.com:YOU/claw-config.git && git fetch -q origin main && git checkout -f -B main origin/main && git status --short'
 ```
-Tracked files now come from your repo. Everything else (`.env`, credentials, sessions, the starter `USER.md`) stays on disk, untracked. OpenClaw's starter `SOUL.md` and `IDENTITY.md` show up as untracked; add them to your repo if you want to change them through PRs.
+Tracked files now come from your repo. Everything else (`.env`, credentials, sessions, the starter `USER.md`) stays on disk, untracked. OpenClaw's starter `SOUL.md` and `IDENTITY.md` show up as untracked: copy them into `workspace/` in your repo, commit and push before step 8. From then on `claw-sync` removes untracked files in the checkout every run (ignored state like `.env` and `USER.md` stays), so anything untracked is deleted. A starter `BOOTSTRAP.md` isn't used by this setup and is removed too. `openclaw.json` sets `agents.defaults.skipBootstrap: true`, so once your config is deployed OpenClaw stops re-creating starter files that are missing.
 
 **Check:** `sudo -iu openclaw git -C ~/.openclaw log --oneline -1` shows your latest commit.
 

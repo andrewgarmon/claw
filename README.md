@@ -24,7 +24,7 @@ This repo is the shared half. The owner's private `claw-config` pulls it through
 ## Security model
 - **One job per Linux user:** the admin user (sudo), `openclaw` (the agent, no sudo), `coder` (Claude Code, read-only GitHub token), `gitbot` (GitHub writes), `calbot` (calendar password).
 - **Brokers hold the secrets.** The assistant runs fixed, argument-checked commands as `gitbot` or `calbot` through sudo and never sees a token or password.
-- **Read-only deploys.** `openclaw`'s deploy key can't push, and `claw-sync` resets edits made in place.
+- **Read-only deploys.** `openclaw`'s deploy key can't push, and `claw-sync` resets edits made in place and removes files added outside git (ignored state such as `.env` and memory stays). The agent's Skill Workshop and `cron` tools are off (until its shell is removed, `openclaw cron`/`automations` through `exec` can still get around that).
 - **Root plumbing is human-applied** from a root-owned clone (`claw-install`), never from the agent-writable checkout.
 - **Public repos are guarded.** `agent-git` takes writes to them from Claude Code only, after a redaction-list check and gitleaks.
 - **Agent state stays out of git.** `USER.md`, `MEMORY.md`, `memory/` and `DREAMS.md` live on the host and are backed up nightly to a private repo. CI fails if they're ever tracked.
