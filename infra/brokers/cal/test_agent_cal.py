@@ -53,7 +53,9 @@ class AgentCal(unittest.TestCase):
         cls.url = f"http://127.0.0.1:{port}/"
         cfg = os.path.join(cls.tmp.name, "config")
         with open(cfg, "w") as f:
-            f.write(f"[server]\nhosts = 127.0.0.1:{port}\n[auth]\ntype = none\n"
+            # auth delay = 0: Radicale waits ~1 s (by default) before every 401, and the caldav client
+            # always sends its first request without credentials, so each agent-cal call paid it once
+            f.write(f"[server]\nhosts = 127.0.0.1:{port}\n[auth]\ntype = none\ndelay = 0\n"
                     f"[storage]\nfilesystem_folder = {cls.tmp.name}/collections\n[logging]\nlevel = error\n")
         cls.rad = subprocess.Popen([RADICALE_PY, "-m", "radicale", "--config", cfg],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -118,6 +120,22 @@ class AgentCal(unittest.TestCase):
 
     def d(self, days):
         return (self.today + dt.timedelta(days=days)).isoformat()
+
+    def test_long_titles_capped_output_compact(self):
+        # far enough ahead that only a 60-day listing sees it
+        start = dt.datetime.combine(self.today + dt.timedelta(days=45), dt.time(10), NY)
+        self.work.save_event(ics("longtitle", start, start + dt.timedelta(hours=1), "L" * 300))
+        p = self.run_cal("events", "America/New_York", "60", "Work")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.count("\n"), 1, "one line of JSON")
+        self.assertNotIn('": ', p.stdout)
+        [ev] = [e for e in json.loads(p.stdout) if e["title"].startswith("LLL")]
+        self.assertEqual(ev["title"], "L" * 200)
+
+    def test_patterns_are_ascii_only(self):
+        # Arabic-Indic digits are \d to Python unless re.ASCII
+        self.assertIn("use 2026-11-16T12:00", self.fails("create", "America/New_York", "Home", "t",
+                                          "\u0662\u0660\u0662\u0666-01-01", "2026-01-02", "", ""))
 
     def test_calendars_lists_event_calendars_only(self):
         names = [c["name"] for c in self.ok("calendars")]

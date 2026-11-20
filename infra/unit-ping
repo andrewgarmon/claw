@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# unit-ping <unit> <url file>: tell a healthchecks.io check how a run of <unit> ended. Run as root from
+# the unit's own ExecStopPost= (after every run; with "+" if the unit runs as another user): a success ping when
+# $SERVICE_RESULT is "success", /fail with the result otherwise. Its own check, so a failure stays down
+# until a run succeeds (claw-sync's pings to the main check would clear it within 5 minutes), and
+# regular success pings make it a dead-man check too. The URL comes from a root-only file under
+# /etc/claw: neither the unit's user nor the agent can read it or point it elsewhere. No URL file:
+# says so and exits 0 (never fails the unit).
+set -uo pipefail
+export PATH=/usr/local/bin:/usr/bin:/bin LC_ALL=C
+unit=${1:-unknown}; unit=${unit//[^A-Za-z0-9@._-]/}
+url_file=${2:-}
+url=$(tr -d ' \r\n' < "$url_file" 2>/dev/null)
+result=${SERVICE_RESULT:-unknown}; result=${result//[^a-z-]/}
+status=${EXIT_STATUS:-?}; status=${status//[^A-Za-z0-9]/}
+[[ $url =~ ^https://[A-Za-z0-9./_:-]+$ ]] || { echo "unit-ping: no ping URL in ${url_file:-(none given)}; $unit: $result" >&2; exit 0; }
+if [ "$result" = success ]; then
+  path="" msg="$unit ok on $(hostname)"
+else
+  path=/fail msg="$unit failed ($result, exit $status) on $(hostname): sudo journalctl -u $unit -n 20"
+fi
+curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "$msg" "$url$path" || echo "unit-ping: ping failed" >&2
+exit 0

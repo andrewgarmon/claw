@@ -1,8 +1,8 @@
 #!/bin/bash
 # Fail if any word from $PERSONAL_DENYLIST (a newline-separated repo secret) appears in the tree, in a
 # tracked path, or in what the given commit range adds (diff lines and commit messages). Case-insensitive,
-# whole-word, fixed strings. Never prints a matched word: only file:line (a path that itself contains a
-# listed word is withheld), a count of matching paths, or commit ids.
+# whole-word, fixed strings. Never prints a matched word or where it is: only counts (matching lines,
+# paths, commits) and which PR field matched.
 # An empty or missing list (fork PRs get no secrets) skips with a note.
 # On PRs, also checks PR_TITLE, PR_BRANCH and PR_BODY (env) before merge, since they go public
 # immediately and end up in the merge or squash commit.
@@ -35,18 +35,17 @@ fi
 echo "checking against $(wc -l < "$list") listed words"
 fail=0
 
-# 1. file contents at this commit: print file:line, never the line itself, and withhold a path
-#    that contains a listed word too. -z gives path NUL line NUL content, so odd paths parse safely.
-#    git grep exits 0 on hits, 1 on none; anything else is an error, and an error must not pass.
+# Only counts are printed, never a location: locations would let anyone who can push a branch
+# confirm guesses about the list one file or commit at a time. Find hits locally with the commands
+# in the messages.
+# 1. file contents at this commit. git grep exits 0 on hits, 1 on none; anything else is an
+#    error, and an error must not pass.
 raw=$(mktemp); trap 'rm -f "$list" "$raw"' EXIT
 rc=0; git grep -z -I -n -i -w -F -f "$list" -- . > "$raw" 2>/dev/null || rc=$?
 if [ "$rc" -gt 1 ]; then echo "::error::git grep failed (exit $rc), so the file check couldn't run"; exit 1; fi
-hits=$(while IFS= read -r -d '' path && IFS= read -r -d '' ln && IFS= read -r _; do
-  if printf '%s\n' "$path" | grep -q -i -w -F -f "$list"; then echo "(path withheld):$ln"; else echo "$path:$ln"; fi
-done < "$raw")
-if [ -n "$hits" ]; then
-  echo "::error::listed words found in these files (word not shown):"
-  printf '%s\n' "$hits"
+hits=$(tr -cd '\0' < "$raw" | wc -c); hits=$((hits / 2))   # -z: path NUL line NUL content per hit
+if [ "$hits" -gt 0 ]; then
+  echo "::error::$hits line(s) in tracked files contain a listed word (locations not shown). Find them locally with: git grep -niwF -f <your list>"
   fail=1
 fi
 
@@ -65,15 +64,20 @@ if [ -n "$range" ] && ! git rev-list --quiet "$range" 2>/dev/null; then
   range=
 fi
 if [ -n "$range" ]; then
+  nd=0 nm=0
   for c in $(git rev-list "$range"); do
     if [ -z "$(git rev-list --no-walk --merges "$c")" ] \
        && git show --format= --no-color --no-ext-diff --no-textconv --no-renames "$c" | { grep '^+' || true; } | matches; then
-      echo "::error::commit $c adds a listed word in its diff"; fail=1
+      nd=$((nd + 1))
     fi
-    if git show -s --format=%B "$c" | matches; then
-      echo "::error::commit $c has a listed word in its message"; fail=1
-    fi
+    if git show -s --format=%B "$c" | matches; then nm=$((nm + 1)); fi
   done
+  if [ "$nd" -gt 0 ]; then
+    echo "::error::$nd commit(s) in $range add a listed word in their diff (commits not shown). Find them locally with: git log -p $range | grep -niwF -f <your list>"; fail=1
+  fi
+  if [ "$nm" -gt 0 ]; then
+    echo "::error::$nm commit message(s) in $range contain a listed word (commits not shown)"; fail=1
+  fi
 fi
 
 # 4. PR title, branch name and body: public already, and carried into the merge or squash commit
