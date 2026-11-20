@@ -164,7 +164,9 @@ def name(s):  # never echo odd text from the registry
     return s if isinstance(s, str) and re.fullmatch(r"[a-z0-9@._/-]{1,64}", s) else "<odd id>"
 try:
     plugins = [p for p in json.load(open(sys.argv[1]))["plugins"] if p.get("enabled")]
-    allow = set(json.load(open(sys.argv[2])).get("plugins", {}).get("allow") or [])
+    cfg = json.load(open(sys.argv[2])).get("plugins", {})
+    allow = set(cfg.get("allow") or [])
+    paths = [x for x in ((cfg.get("load") or {}).get("paths") or []) if isinstance(x, str)]
 except Exception:
     print("unreadable plugins list or openclaw.json"); sys.exit()
 out = []
@@ -178,8 +180,14 @@ out += ["%s loads from the workspace" % name(p.get("id")) for p in plugins if p.
 expected_global = set(sys.argv[4].split())
 out += ["%s loads from ~/.openclaw/extensions" % name(p.get("id")) for p in plugins if p.get("origin") == "global" and p.get("id") not in expected_global]
 root = sys.argv[3]
-ids = sorted(d for d in os.listdir(root) if not d.endswith(".new")) if os.path.isdir(root) else []
-for d in ids:
+# every root-owned plugin: what's installed, plus what openclaw.json loads from under the root dir (so
+# one claw-install never managed to install, e.g. no npm or a failed npm ci, is reported, not
+# silently replaced by an older copy elsewhere)
+installed = {d for d in os.listdir(root) if not d.endswith(".new")} if os.path.isdir(root) else set()
+wanted = {x[len(root) + 1:].split("/")[0] for x in paths if x.startswith(root + "/")} - {""}
+for d in sorted(wanted - installed):
+    out.append("%s isn't installed in %s (sudo claw-install; check its output for npm errors)" % (name(d), root))
+for d in sorted(installed):
     mine = [p for p in plugins if p.get("id") == d]
     if not any(str(p.get("rootDir") or "").startswith(os.path.join(root, d) + "/") or p.get("rootDir") == os.path.join(root, d) for p in mine):
         out.append("%s isn't enabled from %s" % (name(d), os.path.join(root, name(d))))
