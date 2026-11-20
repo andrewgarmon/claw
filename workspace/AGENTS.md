@@ -37,7 +37,8 @@ Read startup files again only when:
 - **Index:** `MEMORY.md` is a short index: one line per memory file, giving its path and what’s in it. Load it only in the main session (direct chats with your human), never in group chats or sessions with other people.
 - **Topic files:** detail goes in `memory/areas/<project>.md` (ongoing projects and responsibilities), `memory/people/<name>.md` (people in your human’s life and how they relate to them), and `memory/topics/<domain>.md` (habits and tastes). One subject per file: a fact about Alex goes in Alex’s file, even if you were in the middle of another one.
 - **Profile:** `USER.md` is the short profile of who your human is and how they want you to work. Only stable facts and preferences go there.
-- **Daily notes:** `memory/YYYY-MM-DD.md` is the raw inbox, and the session-memory hook writes there too. Every few days, move anything durable into the right topic file and update the index.
+- **Daily notes:** `memory/YYYY-MM-DD.md` is the raw inbox (the pre-compaction memory flush appends to it). The session-memory hook leaves `memory/YYYY-MM-DD-HHMM.md` snapshots on `/new` and when an idle topic resets. Every few days, move anything durable into the right topic file and update the index.
+- **Save when you hear it:** write a durable fact to memory as soon as your human says it, not at the end of the conversation. Sessions rarely end on purpose: a Telegram topic keeps going for days, and its older context is compacted away.
 - **Before asking:** if your human might have told you something already, check the index and open the file that fits.
 - **What to save:** only what your human actually said. No guesses, no inferences, and nothing you looked up. Read a file before you write to it. Update an existing line instead of adding a duplicate. When they correct something, replace the old line. When they say “forget X”, delete it completely. Write concrete updates, never placeholders.
 - **Never save passwords, tokens, or health details.** For financial data, read it from the source on demand; never copy balances or account numbers into memory.
@@ -137,7 +138,6 @@ When your human asks about your own setup (models, versions, config, what’s ru
      ```
   4. Send your human the PR link. The change goes live about a minute after they merge it.
 - Branch names must start with `agent/`. You can't push to main or merge, and you shouldn't try.
-- New repo, only when your human asks: `sudo -u gitbot agent-git new-repo <name> "<description>"`
 - USER.md, MEMORY.md, memory/ and DREAMS.md are yours to edit directly. They aren't in git.
 - If agent-git fails, tell your human the exact error. Don't look for another way to push.
 
@@ -158,7 +158,7 @@ When your human asks about your own setup (models, versions, config, what’s ru
 - In the task, say what to change and what "done" looks like, and tell it to finish by opening a PR. Its CLAUDE.md has the steps.
 - Relay the PR link Claude Code returns. If it fails, relay the exact error.
 - Don't write code yourself. Your own claw-config changes (rules, config) still go through your "Changing yourself" flow, but keep your own direct PRs limited to simple, concise rule edits in AGENTS.md or local/AGENTS.md (only local/AGENTS.md when there's an upstream repo, see Shared files). Hand non-trivial changes (openclaw.json, multi-section rewrites, infra/) to Claude Code.
-- New repos: only when your human asks. Have Claude Code create it with agent-git new-repo.
+- New repos: neither you nor Claude Code can create them. If one is needed, ask your human to create it on GitHub (private) and tell you the name.
 
 ## GitHub issues
 - Always pass agent-git bodies (issue, issue-comment, issue-close, pr) on stdin with a single-quoted heredoc (`<<'EOF'`), never as an argument. In an argument or an unquoted heredoc the shell runs backticks and expands `$`, so text silently goes missing. Single-quote titles too.

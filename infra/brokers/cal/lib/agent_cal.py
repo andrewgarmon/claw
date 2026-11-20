@@ -44,12 +44,13 @@ MAX_DAYS = 60          # how far ahead events can look
 MAX_EVENT_DAYS = 14    # longest event create/update will make
 MAX_EVENTS = 500
 MAX_NOTES_OUT = 1000
+MAX_TITLE_OUT = 200   # titles come from whoever sent the invite
 MAX_CHANGES_PER_DAY = 10   # updates + deletes per rolling 24h (undo doesn't count)
 MAX_CREATES_PER_DAY = 20
 MAX_UNDOS_PER_DAY = 20
 ID_TTL = dt.timedelta(days=7)
 HISTORY_KEEP = 200
-WHEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?$")
+WHEN_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2})?)?$", re.ASCII)
 FIELDS = ("title", "start", "end", "location", "notes")
 
 
@@ -123,7 +124,7 @@ def record(history, entry):
 def caldav_url():
     url = os.environ.get("CALDAV_URL") or "https://caldav.icloud.com/"
     # the password goes out with every request: only over TLS (plain http only to this machine, for tests)
-    if not re.match(r"^(https://[A-Za-z0-9.-]+(:\d+)?(/.*)?|http://(127\.0\.0\.1|localhost)(:\d+)?(/.*)?)$", url):
+    if not re.match(r"^(https://[A-Za-z0-9.-]+(:\d+)?(/.*)?|http://(127\.0\.0\.1|localhost)(:\d+)?(/.*)?)$", url, re.ASCII):
         raise Fail("CALDAV_URL must be https:// (or http:// to localhost)")
     return url
 
@@ -227,7 +228,7 @@ def span(comp):
 def normalize(comp, calname, tz):
     """One VEVENT (an expanded occurrence) as a plain dict, times in tz."""
     start, end, all_day = span(comp)
-    ev = {"calendar": calname, "title": text(comp, "summary") or "(no title)",
+    ev = {"calendar": calname, "title": text(comp, "summary", MAX_TITLE_OUT) or "(no title)",
           "start": iso(start, tz), "end": iso(end, tz), "all_day": all_day}
     if text(comp, "location"):
         ev["location"] = text(comp, "location", 200)
@@ -598,7 +599,7 @@ def main(argv):
         else:
             print(f"agent-cal: {name}: {scrub(str(e))}", file=sys.stderr)
         return 1
-    json.dump(out, sys.stdout, ensure_ascii=False, indent=1)
+    json.dump(out, sys.stdout, ensure_ascii=False, separators=(",", ":"))   # compact: it's read by a model
     print()
     return 0
 

@@ -45,9 +45,24 @@ install -d -m 755 -o root -g root /usr/local/lib/claw /usr/local/lib/claw/broker
 install -m 644 -o root -g root lib/broker.sh /usr/local/lib/claw/broker.sh
 for b in brokers/*/; do broker_install "$b"; done
 broker_prune brokers
+# broker refusals: claw-denywatch (root, every 15 min) alerts on DENY lines; the logs rotate weekly
+command -v logrotate >/dev/null || apt-get install -y logrotate
+broker_logs_install brokers || exit 1
+install -m 755 -o root -g root claw-denywatch /usr/local/bin/
+install -m 644 -o root -g root claw-denywatch.service claw-denywatch.timer /etc/systemd/system/
+install -d -m 755 -o root -g root /etc/claw
+# redact.txt -> the CI secret PERSONAL_DENYLIST, hourly as root with a root-only token (so nothing
+# running as gitbot can rewrite the secret); each run pings its own check from /etc/claw/redact-sync.url
+install -m 755 -o root -g root redact-sync unit-ping /usr/local/lib/claw/
+install -m 644 -o root -g root claw-redact-sync.service claw-redact-sync.timer /etc/systemd/system/
 
 # --- deploy timer (claw-sync) + nightly state backup (claw-backup)
 command -v curl >/dev/null || apt-get install -y curl   # claw-sync healthchecks pings
+command -v age >/dev/null || apt-get install -y age     # claw-backup encrypts state with it
+# the backup's public key, from the config repo's backup.age.pub when there is one (a bad file
+# fails the install before anything else changes below)
+. lib/backup-key.sh
+backup_key_install ../backup.age.pub || exit 1
 install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
 install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
 install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
@@ -55,6 +70,10 @@ install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
 # nightly run. Created as openclaw: root never writes under a service user's home.
 (cd / && sudo -u openclaw sh -c '[ -e "$1/last-ok" ] || { mkdir -p "$1" && touch "$1/last-ok"; }' _ /home/openclaw/.cache/claw-backup)
 install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
+# claw-sync (as openclaw) reads the installed commit to say when an install is pending. claw-install
+# writes it 644, but a copy from before that wrote it 600, and the first install after the change
+# still runs that old copy: this fixes the mode on the run after.
+[ ! -f /var/lib/claw-install/last ] || chmod 644 /var/lib/claw-install/last
 
 # --- Claude Code as coder (ACP target)
 id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
@@ -92,13 +111,23 @@ sudo -H -u coder git -C /home/coder config --global user.email claude@claw.inval
 gateway_dropins_install
 
 systemctl daemon-reload
-systemctl enable --now claw-sync.timer claw-backup.timer
+systemctl enable --now claw-sync.timer claw-backup.timer claw-denywatch.timer
+# redact-sync only once gitbot has a list and the root-only token exists (without them every run
+# fails); disabled otherwise, so a re-run of claw-install never turns it on early
+if as_user gitbot test -s /home/gitbot/.config/redact.txt && [ -s /etc/claw/redact-sync-token ]; then
+  systemctl enable --now claw-redact-sync.timer
+  [ -s /etc/claw/redact-sync.url ] || echo "TODO: healthchecks.io ping URL for redact-sync in /etc/claw/redact-sync.url, root 600 (infra/README.md: CI secret from redact.txt)"
+else
+  systemctl disable --now claw-redact-sync.timer 2>/dev/null || true
+  echo "note: claw-redact-sync is off until gitbot has redact.txt and /etc/claw/redact-sync-token exists (optional; infra/README.md: CI secret from redact.txt)"
+fi
 
 # (checked as each user, like everything else in their homes)
 as_user coder test -s /home/coder/.config/coder.env || echo "TODO: coder read-only GitHub token (README: secrets)"
 as_user openclaw grep -q '^HEALTHCHECKS_PING_URL=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: HEALTHCHECKS_PING_URL in ~/.openclaw/.env (README: dead-man alerts)"
 as_user openclaw grep -q '^TELEGRAM_ALLOW_FROM=' /home/openclaw/.openclaw/.env 2>/dev/null || echo "TODO: TELEGRAM_ALLOW_FROM in ~/.openclaw/.env, or Telegram ignores everyone (README: secrets)"
 as_user coder test -x /home/coder/.local/bin/claude || echo "TODO: install + log in Claude Code as coder (README)"
+[ -s /etc/claw/denywatch.url ] || echo "TODO: healthchecks.io ping URL for broker refusal alerts in /etc/claw/denywatch.url, root 600 (infra/README.md: broker refusal alerts)"
 cmp -s acp/package-lock.json "$ACP/package-lock.json" && [ -x "$ACP/node_modules/.bin/claude-agent-acp" ] \
   || echo "TODO: the pinned ACP adapter isn't installed (needs Node/npm; README: Claude Code). Re-run: sudo claw-install"
 echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload, then restart the gateway"

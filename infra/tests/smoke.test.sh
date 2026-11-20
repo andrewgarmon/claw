@@ -19,8 +19,9 @@ sed -e "s|^export PATH=.*|export PATH=$BIN:/usr/local/bin:/usr/bin:/bin|" \
     -e "s|^AGENT_CAL=.*|AGENT_CAL=$BIN/agent-cal|" \
     -e "s|^CAL_SECRET=.*|CAL_SECRET=$T/calbot/caldav.env|" \
     -e "s|^OC_HOME=.*|OC_HOME=$OC|" \
-    -e "s|^OC_PLUGINS=.*|OC_PLUGINS=$T/ocp|" "$INFRA/smoke.sh" > "$SM"
-[ "$(grep -c "$T" "$SM")" = 9 ] || { echo "FAIL could not point claw-smoke at the test dir (did its constants change?)"; exit 1; }
+    -e "s|^OC_PLUGINS=.*|OC_PLUGINS=$T/ocp|" \
+    -e "s|^SMOKE_WINDOWS=.*|SMOKE_WINDOWS=$T/smoke/refusal-windows|" "$INFRA/smoke.sh" > "$SM"
+[ "$(grep -c "$T" "$SM")" = 10 ] || { echo "FAIL could not point claw-smoke at the test dir (did its constants change?)"; exit 1; }
 
 cat > "$T/lib/package-lock.json" <<'EOF'
 {"name": "claw-acp-adapter", "lockfileVersion": 3,
@@ -139,6 +140,7 @@ check "claude-usage runs as openclaw -> coder, fresh" eval 'grep -q "^openclaw -
 check "refusals are tried as coder and as openclaw, never as root" \
   eval 'grep -q "^coder pr claw-state agent/state/claw-smoke" "$T/agent-git.log" && grep -q "^openclaw pr claw-state claude/claw-smoke" "$T/agent-git.log" && ! grep -q "^root " "$T/agent-git.log"'
 check "agent-cal: only the read-only verb" eval '[ ! -e "$T/cal-writes" ]'
+check "records the refusal checks' window for claw-denywatch" eval 'tail -n1 "$T/smoke/refusal-windows" | grep -qE "^[0-9]{10} [0-9]{10}$"'
 
 echo 0.106.0 > "$T/acp_version"
 run; check "wrong adapter version: FAIL with both versions, exit 1" \
