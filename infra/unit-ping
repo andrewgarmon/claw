@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # unit-ping <unit> <url file>: tell a healthchecks.io check how a run of <unit> ended. Run as root from
-# the unit's own ExecStopPost=+ (so after every run, whatever its user): a success ping when
+# the unit's own ExecStopPost= (after every run; with "+" if the unit runs as another user): a success ping when
 # $SERVICE_RESULT is "success", /fail with the result otherwise. Its own check, so a failure stays down
 # until a run succeeds (claw-sync's pings to the main check would clear it within 5 minutes), and
 # regular success pings make it a dead-man check too. The URL comes from a root-only file under

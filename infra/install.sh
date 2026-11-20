@@ -49,8 +49,8 @@ broker_logs_install brokers || exit 1
 install -m 755 -o root -g root claw-denywatch /usr/local/bin/
 install -m 644 -o root -g root claw-denywatch.service claw-denywatch.timer /etc/systemd/system/
 install -d -m 755 -o root -g root /etc/claw
-# redact.txt -> the CI secret PERSONAL_DENYLIST, hourly as gitbot; each run pings its own check from
-# the root-only /etc/claw/redact-sync.url through unit-ping (gitbot can't read it)
+# redact.txt -> the CI secret PERSONAL_DENYLIST, hourly as root with a root-only token (so nothing
+# running as gitbot can rewrite the secret); each run pings its own check from /etc/claw/redact-sync.url
 install -m 755 -o root -g root redact-sync unit-ping /usr/local/lib/claw/
 install -m 644 -o root -g root claw-redact-sync.service claw-redact-sync.timer /etc/systemd/system/
 
@@ -103,14 +103,14 @@ gateway_dropins_install
 
 systemctl daemon-reload
 systemctl enable --now claw-sync.timer claw-backup.timer claw-denywatch.timer
-# redact-sync only once gitbot has a list and its own token (without them every run fails); disabled
-# otherwise, so a re-run of claw-install never turns it on early
-if as_user gitbot test -s /home/gitbot/.config/redact.txt && as_user gitbot test -s /home/gitbot/.config/redact-sync-token; then
+# redact-sync only once gitbot has a list and the root-only token exists (without them every run
+# fails); disabled otherwise, so a re-run of claw-install never turns it on early
+if as_user gitbot test -s /home/gitbot/.config/redact.txt && [ -s /etc/claw/redact-sync-token ]; then
   systemctl enable --now claw-redact-sync.timer
   [ -s /etc/claw/redact-sync.url ] || echo "TODO: healthchecks.io ping URL for redact-sync in /etc/claw/redact-sync.url, root 600 (infra/README.md: CI secret from redact.txt)"
 else
   systemctl disable --now claw-redact-sync.timer 2>/dev/null || true
-  echo "note: claw-redact-sync is off until gitbot has redact.txt and redact-sync-token (optional; infra/README.md: CI secret from redact.txt)"
+  echo "note: claw-redact-sync is off until gitbot has redact.txt and /etc/claw/redact-sync-token exists (optional; infra/README.md: CI secret from redact.txt)"
 fi
 
 # (checked as each user, like everything else in their homes)
