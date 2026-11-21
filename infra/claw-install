@@ -57,23 +57,48 @@ oc() { (cd / && sudo -n -H -u "$OC_USER" env XDG_RUNTIME_DIR="/run/user/$(id -u 
           PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" "$@"); }
 gw_pid() { oc systemctl --user show -p MainPID --value openclaw-gateway 2>/dev/null; }
 
-# Restart the gateway with claw-sync paused (its timer stopped, any run in progress finished), so a
-# deploy restart can't overlap this one; the timer is started again on any exit (cleanup).
-restart_gateway() {
+# Pause claw-sync (its timer stopped, any run in progress finished), so a deploy restart can't overlap
+# one of ours; the timer is started again on any exit (cleanup).
+sync_pause() {
   local end=$((SECONDS + DEPLOY_WAIT))
+  [ -n "$PAUSED" ] && return 0
   systemctl stop claw-sync.timer; PAUSED=1
   while [[ $(systemctl show -p ActiveState --value claw-sync.service) =~ ^(activating|deactivating)$ ]]; do
     [ "$SECONDS" -lt "$end" ] || die "claw-sync is still running after ${DEPLOY_WAIT}s"
     sleep "$POLL"
   done
-  echo "restarting the gateway (plugin code or its drop-ins changed)"
-  oc systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2
-  end=$((SECONDS + HEALTH_WAIT))
+}
+wait_healthy() {  # wait_healthy <what happened>
+  local end=$((SECONDS + HEALTH_WAIT))
   until oc systemctl --user is-active -q openclaw-gateway && oc openclaw gateway health --timeout 10000 >/dev/null 2>&1; do
-    [ "$SECONDS" -lt "$end" ] || die "gateway not healthy ${HEALTH_WAIT}s after the restart"
+    [ "$SECONDS" -lt "$end" ] || die "gateway not healthy ${HEALTH_WAIT}s after $1"
     sleep "$POLL"
   done
   echo "gateway healthy"
+}
+restart_gateway() {
+  sync_pause
+  echo "restarting the gateway (plugin code or its drop-ins changed)"
+  oc systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2
+  wait_healthy "the restart"
+}
+
+# update_openclaw <repo>: put the host on the OpenClaw version infra/openclaw/package.json pins, through
+# OpenClaw's own updater as openclaw (it stops, replaces and restarts the gateway, and recovers if the
+# new one doesn't come up), with claw-sync paused. Not when nothing is pinned or it already matches.
+update_openclaw() {
+  local want have
+  want=$(sed -n 's/^ *"openclaw": *"\([^"]*\)".*/\1/p' "$1/infra/openclaw/package.json" 2>/dev/null | head -1)  || true
+  [ -n "$want" ] || return 0
+  [[ $want =~ ^[0-9]{4}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "infra/openclaw/package.json: \"$want\" isn't an exact OpenClaw version"
+  have=$(oc openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1) || true
+  [ "$have" != "$want" ] || return 0
+  echo "updating OpenClaw ${have:-(unknown)} -> $want (openclaw update, as $OC_USER)"
+  sync_pause
+  oc openclaw update --tag "$want" --yes --timeout 900 || die "openclaw update to $want failed (see above; it keeps or restores the previous version)"
+  have=$(oc openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1) || true
+  [ "$have" = "$want" ] || die "openclaw update finished, but openclaw --version says ${have:-nothing}, not $want"
+  wait_healthy "the OpenClaw update"
 }
 
 # claw-sync deploys <sha> (or a later commit of main): it was holding the config back for this install
@@ -91,12 +116,13 @@ wait_deployed() {
   done
 }
 
-# reload_gateway <repo> <last> <sha>: get the running gateway onto what was just installed, with one
+# reload_gateway <repo> <last> <sha> <gateway pid before the install>: get the running gateway onto what
+# was just installed (an OpenClaw update counts as its restart), with one
 # restart at most. If openclaw.json changed, claw-sync deploys it now (it was waiting for this install)
 # and restarts the gateway when the config differs from what's running. Plugin code and drop-ins load
 # only at start, so if they changed and the gateway hasn't restarted since, restart it here.
 reload_gateway() {
-  local r=$1 last=$2 sha=$3 changed pid
+  local r=$1 last=$2 sha=$3 pid=$4 changed
   if [ -n "$last" ] && git -C "$r" cat-file -e "$last^{commit}" 2>/dev/null; then
     changed=$(git -C "$r" diff --name-only "$last" "$sha" -- openclaw.json infra/openclaw-plugins infra/gateway-dropins)
   else
@@ -106,7 +132,6 @@ reload_gateway() {
   if grep -q '^infra/gateway-dropins/' <<< "$changed"; then
     oc systemctl --user daemon-reload || die "systemctl --user daemon-reload as $OC_USER failed"
   fi
-  pid=$(gw_pid)
   ! grep -qx openclaw.json <<< "$changed" || wait_deployed "$sha"
   if grep -q '^infra/' <<< "$changed" && [ "$(gw_pid)" = "$pid" ]; then restart_gateway; fi
 }
@@ -180,7 +205,7 @@ main() {
     flock -w 3600 8 || die "still running after an hour"
   fi
 
-  local r sha last="" failed=""
+  local r sha last="" failed="" pid
   if [ -f "$STATE/last" ]; then
     last=$(head -c 40 "$STATE/last")
     [[ "$last" =~ ^[0-9a-f]{40}$ ]] || last=
@@ -207,6 +232,7 @@ main() {
 
   confirm "$r" "$sha" "$last"
 
+  pid=$(gw_pid)
   echo "running infra/install.sh from ${sha:0:7}"
   # the clone stays private (its dir is 700); installed files get the usual sudo umask
   (umask 022; CLAW_INSTALL_SHA=$sha bash "$r/infra/install.sh") || die "install.sh failed; nothing recorded"
@@ -219,7 +245,8 @@ main() {
     echo "updated $SELF"
   fi
   echo "installed ${sha:0:7}"
-  reload_gateway "$r" "$last" "$sha"
+  update_openclaw "$r"
+  reload_gateway "$r" "$last" "$sha" "$pid"
 
   # check the live wiring (read-only). A failure doesn't undo the install, but it's the last line.
   if [ -x "$SMOKE" ]; then

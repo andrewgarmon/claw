@@ -99,6 +99,9 @@ if ! cmp -s acp/package-lock.json "$ACP/package-lock.json" || [ ! -x "$ACP/node_
     fi
   fi
 fi
+# the pinned OpenClaw version, for claw-smoke (claw-install applies it with openclaw update)
+install -d -m 755 -o root -g root /usr/local/lib/claw/openclaw
+install -m 644 -o root -g root openclaw/package.json /usr/local/lib/claw/openclaw/
 # --- OpenClaw plugins loaded from root-owned paths (plugins.load.paths): infra/openclaw-plugins/<id>/
 oc_plugins_install openclaw-plugins
 

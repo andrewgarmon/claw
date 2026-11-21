@@ -20,8 +20,9 @@ sed -e "s|^export PATH=.*|export PATH=$BIN:/usr/local/bin:/usr/bin:/bin|" \
     -e "s|^CAL_SECRET=.*|CAL_SECRET=$T/calbot/caldav.env|" \
     -e "s|^OC_HOME=.*|OC_HOME=$OC|" \
     -e "s|^OC_PLUGINS=.*|OC_PLUGINS=$T/ocp|" \
+    -e "s|^OC_PIN=.*|OC_PIN=$T/lib/openclaw.json|" \
     -e "s|^SMOKE_WINDOWS=.*|SMOKE_WINDOWS=$T/smoke/refusal-windows|" "$INFRA/smoke.sh" > "$SM"
-[ "$(grep -c "$T" "$SM")" = 10 ] || { echo "FAIL could not point claw-smoke at the test dir (did its constants change?)"; exit 1; }
+[ "$(grep -c "$T" "$SM")" = 11 ] || { echo "FAIL could not point claw-smoke at the test dir (did its constants change?)"; exit 1; }
 
 cat > "$T/lib/package-lock.json" <<'EOF'
 {"name": "claw-acp-adapter", "lockfileVersion": 3,
@@ -105,6 +106,7 @@ echo "token=$SECRET" >&2
 case "\$*" in
   "gateway health --timeout 10000") [ ! -e "$T/gw_down" ] ;;
   "plugins list --json --enabled") [ ! -e "$T/plugins_fail" ] && cat "$T/plugins.json" ;;
+  --version) echo "OpenClaw \$(cat "$T/ocver") (abc1234)" ;;
   *) exit 2 ;;
 esac
 EOF
@@ -116,6 +118,7 @@ plugins_json() {  # plugins_json <duckduckgo rootDir> [extra plugin JSON objects
 }
 plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"
 chmod +x "$BIN"/* "$OC/.npm-global/bin/openclaw"
+echo 2026.11.3 > "$T/ocver"; printf '{\n  "dependencies": {\n    "openclaw": "2026.11.3"\n  }\n}\n' > "$T/lib/openclaw.json"
 
 # ~/.openclaw: a clone of a scratch origin, so HEAD vs origin/main can be checked
 git init -q --bare -b main "$T/origin.git"
@@ -135,7 +138,7 @@ says() { grep -q -- "$1" "$T/out"; }   # basic regex: "." stands in for apostrop
 
 run
 check "all good: every check passes, exit 0" \
-  eval '[ $rc = 0 ] && says "PASS acp-adapter" && says "PASS agent-git-token" && says "PASS agent-git-refusals" && says "PASS timers" && says "PASS gateway" && says "PASS agent-cal" && says "PASS claude-usage" && says "PASS plugins" && says "PASS tools" && says "all 9 checks passed"'
+  eval '[ $rc = 0 ] && says "PASS acp-adapter" && says "PASS agent-git-token" && says "PASS agent-git-refusals" && says "PASS timers" && says "PASS gateway" && says "PASS agent-cal" && says "PASS claude-usage" && says "PASS plugins" && says "PASS tools" && says "all 10 checks passed"'
 check "ACP adapter runs as openclaw -> coder, the way acpx does" eval 'grep -q "^openclaw -> coder: $BIN/coder-acp" "$T/sudo.log"'
 check "claude-usage runs as openclaw -> coder, fresh" eval 'grep -q "^openclaw -> coder: $BIN/claude-usage" "$T/sudo.log"'
 check "refusals are tried as coder and as openclaw, never as root" \
@@ -145,7 +148,7 @@ check "records the refusal checks' window for claw-denywatch" eval 'tail -n1 "$T
 
 echo 0.106.0 > "$T/acp_version"
 run; check "wrong adapter version: FAIL with both versions, exit 1" \
-  eval '[ $rc = 1 ] && says "FAIL acp-adapter: adapter is 0.106.0 but the lockfile pins 0.107.3" && says "1 of 9 checks FAILED"'
+  eval '[ $rc = 1 ] && says "FAIL acp-adapter: adapter is 0.106.0 but the lockfile pins 0.107.3" && says "1 of 10 checks FAILED"'
 echo '1.0; rm -rf /' > "$T/acp_version"
 run; check "odd version string isn't echoed" eval '[ $rc = 1 ] && says "no usable agent version" && ! says "rm -rf"'
 rm "$T/acp_version"
@@ -162,7 +165,7 @@ mv "$T/lib/lock.bak" "$T/lib/package-lock.json"
 
 touch "$T/usage_unavailable"
 run; check "claude-usage without plan limits (exit 3): SKIP, still passes" \
-  eval '[ $rc = 0 ] && says "SKIP claude-usage: plan limits unavailable" && says "all 8 checks passed (1 skipped)"'
+  eval '[ $rc = 0 ] && says "SKIP claude-usage: plan limits unavailable" && says "all 9 checks passed (1 skipped)"'
 rm "$T/usage_unavailable"; touch "$T/usage_bad"
 run; check "claude-usage without a weekly number: FAIL" eval '[ $rc = 1 ] && says "FAIL claude-usage: no usable answer (exit 0)"'
 rm "$T/usage_bad"; chmod -x "$BIN/claude-usage"
@@ -193,18 +196,21 @@ git -C "$OC/.openclaw" merge -q --ff-only origin/main
 touch "$T/gw_down"
 run; check "gateway not answering: FAIL" eval '[ $rc = 1 ] && says "FAIL gateway: openclaw gateway health didn.t answer"'
 rm "$T/gw_down"
+echo 2026.11.6 > "$T/ocver"
+run; check "OpenClaw isn't the pinned version: FAIL naming both" eval '[ $rc = 1 ] && says "FAIL openclaw-version: OpenClaw is 2026.11.6 but infra/openclaw pins 2026.11.3"'
+echo 2026.11.3 > "$T/ocver"
 
 touch "$T/cal_bad"
 run; check "calendar password broken: FAIL" eval '[ $rc = 1 ] && says "FAIL agent-cal: listing calendars failed"'
 rm "$T/cal_bad" "$T/calbot/caldav.env"
-run; check "no CalDAV secret: SKIP, still passes" eval '[ $rc = 0 ] && says "SKIP agent-cal: no CalDAV secret yet" && says "all 8 checks passed (1 skipped)"'
+run; check "no CalDAV secret: SKIP, still passes" eval '[ $rc = 0 ] && says "SKIP agent-cal: no CalDAV secret yet" && says "all 9 checks passed (1 skipped)"'
 mv "$BIN/agent-cal" "$T/agent-cal.off"
 run; check "cal broker not installed: SKIP" eval '[ $rc = 0 ] && says "SKIP agent-cal: broker not installed"'
 mv "$T/agent-cal.off" "$BIN/agent-cal"
 
 touch "$T/token_bad" "$T/gw_down"
 run; check "several failures: each listed, count in the last line" \
-  eval '[ $rc = 1 ] && says "FAIL agent-git-token" && says "FAIL gateway" && [ "$(tail -n1 "$T/out")" = "claw-smoke: 2 of 8 checks FAILED" ]'
+  eval '[ $rc = 1 ] && says "FAIL agent-git-token" && says "FAIL gateway" && [ "$(tail -n1 "$T/out")" = "claw-smoke: 2 of 9 checks FAILED" ]'
 rm "$T/token_bad" "$T/gw_down"
 
 # plugins

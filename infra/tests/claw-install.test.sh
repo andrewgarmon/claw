@@ -61,7 +61,18 @@ case "\$*" in
 esac
 exit 0
 EOF
-printf '#!/bin/bash\n[ "$1 $2" = "gateway health" ] && [ ! -e "%s/unhealthy" ]\n' "$T" > "$BIN/openclaw"
+# fake openclaw: gateway health, --version from $T/ocver, update --tag V (logged; sets the version and
+# restarts the gateway, like the real updater)
+cat > "$BIN/openclaw" <<EOF
+#!/bin/bash
+case "\$1" in
+  gateway) [ ! -e "$T/unhealthy" ] ;;
+  --version) [ -e "$T/ocver" ] && echo "OpenClaw \$(cat "$T/ocver") (abc1234)" ;;
+  update) echo "\$*" >> "$T/update.log"; [ ! -e "$T/update_fails" ] || exit 1
+          echo "\$3" > "$T/ocver"; echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid" ;;
+  *) exit 2 ;;
+esac
+EOF
 echo 100 > "$T/gwpid"
 chmod +x "$BIN"/*
 
@@ -261,6 +272,26 @@ mv "$T/origin.git" "$T/origin.away"
 run --auto
 check "auto, GitHub unreachable: exit 0 (claw-sync reports fetch failures), next run tries again" eval '[ $rc = 0 ] && says "offline"'
 mv "$T/origin.away" "$T/origin.git"
+wait; run --auto   # install what was pushed while locked
+
+# ---------- the pinned OpenClaw version ----------
+pin() { mkdir -p "$T/dev/infra/openclaw"; printf '{\n  "dependencies": {\n    "openclaw": "%s"\n  }\n}\n' "$1" > "$T/dev/infra/openclaw/package.json"; }
+echo 2026.1.0 > "$T/ocver"; : > "$T/update.log"
+pin 2026.1.1; echo 10 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "OpenClaw 2026.1.1 + plugin" >/dev/null
+run --auto
+check "pin differs from the host: openclaw update --tag as openclaw, claw-sync paused, counts as the restart" \
+  eval '[ $rc = 0 ] && grep -q "^update --tag 2026.1.1 --yes" "$T/update.log" && [ "$(cat "$T/ocver")" = 2026.1.1 ] && restarts 0 && [ "$(head -n1 "$T/systemctl.log" | grep -c "stop claw-sync.timer")" = 0 ] && grep -q "^stop claw-sync.timer$" "$T/systemctl.log" && [ "$(tail -n1 "$T/systemctl.log")" = "start claw-sync.timer" ] && says "updating OpenClaw 2026.1.0 -> 2026.1.1"'
+: > "$T/update.log"; echo 11 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin only" >/dev/null
+run --auto
+check "pin matches: no update, the plugin change restarts as usual" eval '[ $rc = 0 ] && [ ! -s "$T/update.log" ] && restarts 1'
+pin "^2026.1.2"; b1=$(push "a range, not a version")
+run --auto
+check "a range instead of an exact version: refused" eval '[ $rc = 1 ] && says "an exact OpenClaw version" && [ ! -s "$T/update.log" ] && failed "$b1"'
+pin 2026.1.2; touch "$T/update_fails"; b2=$(push "update fails")
+run --auto
+check "openclaw update fails: fails, marked failed, timer started again" \
+  eval '[ $rc = 1 ] && says "openclaw update to 2026.1.2 failed" && failed "$b2" && [ "$(tail -n1 "$T/systemctl.log")" = "start claw-sync.timer" ]'
+rm "$T/update_fails"
 
 # ---------- install.sh's own guard ----------
 # copy the real install.sh into an other-writable dir; with id faking root it must refuse

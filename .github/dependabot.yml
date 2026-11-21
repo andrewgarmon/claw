@@ -8,6 +8,6 @@ updates:
     schedule: { interval: weekly }
     groups: { actions: { patterns: ["*"] } }
   - package-ecosystem: npm
-    directories: [/infra/acp, /infra/openclaw-plugins/duckduckgo]
+    directories: [/infra/acp, /infra/openclaw-plugins/duckduckgo, /infra/openclaw]
     schedule: { interval: weekly }
     groups: { npm: { patterns: ["*"] } }

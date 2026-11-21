@@ -306,6 +306,12 @@
     "enabled": false,
     "consentedAt": "2026-11-11T02:42:33.109Z"
   },
+  "update": {
+    "checkOnStart": false,
+    "auto": {
+      "enabled": false
+    }
+  },
   "gateway": {
     "mode": "local",
     "port": 18789,

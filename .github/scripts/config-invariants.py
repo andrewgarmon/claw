@@ -17,6 +17,8 @@ EQUAL = {
     "skills.workshop.autonomous.mode": "off",
     "skills.allowBundled": [],
     "agents.defaults.heartbeat.every": "0m",
+    "update.checkOnStart": False,   # the OpenClaw version comes from infra/openclaw/package.json
+    "update.auto.enabled": False,
     "acp.allowedAgents": ["claude"],
     "acp.defaultAgent": "claude",
     "plugins.entries.acpx.config.agents": {"claude": {"command": "sudo", "args": ["-n", "-u", "coder", "/usr/local/bin/coder-acp"]}},
