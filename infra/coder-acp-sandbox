@@ -4,6 +4,11 @@
 # environment reset); it runs as root only to call systemd-run. All it takes from the caller is the
 # working directory, and only one under /srv/work.
 #
+# The unit starts as root only to give the session its own PID namespace (unshare; systemd's
+# PrivatePIDs needs 257, Ubuntu 24.04 has 255), then setpriv drops to coder with no capabilities.
+# Without it a session could reach the host's view of the filesystem through /proc/<pid>/root of
+# any coder process outside the sandbox (claude-usage, install.sh's steps as coder).
+#
 # Inside, the filesystem is read-only except:
 #   /srv/work                          the repos
 #   ~/.claude                          Claude Code's session data, login and state (coder-acp-run puts
@@ -15,8 +20,9 @@
 # and /tmp is private. On top, everything in ~/.claude that would carry code or instructions into
 # later sessions is bound read-only (PROTECTED): settings (statusLine, apiKeyHelper, ... run commands),
 # CLAUDE.md, rules, commands, agents, skills, output styles, plugins. They must exist and not be
-# symlinks (install.sh makes sure, as coder), or the session doesn't start: a bind mount can't be
-# renamed or removed from inside, so a session can't swap them out. Hooks, MCP servers, plugin
+# symlinks or hard-linked files (install.sh makes sure, as coder), or the session doesn't start: a
+# bind mount can't be renamed or removed from inside, and a hard link can't be made across mounts,
+# so a session can't swap them out or write them through another name. Hooks, MCP servers, plugin
 # marketplaces and auto-memory are off by policy (/etc/claude-code/managed-settings.json). The network
 # stays open: GitHub, Anthropic and npm are needed.
 #
@@ -33,7 +39,7 @@ RUN=/usr/local/lib/claw/coder-acp-run
 PROBE=/usr/local/lib/claw/coder-sandbox-probe
 # "-": skipped if missing (and stays read-only)
 WRITABLE=("$WORK" "$H/.claude" "-$H/.cache" "-$H/.npm"
-          /home/gitbot -/run/sudo -/var/lib/sudo)
+          -/home/gitbot -/run/sudo -/var/lib/sudo)
 PROTECTED=("$H/.claude/settings.json" "$H/.claude/settings.local.json" "$H/.claude/CLAUDE.md"
            "$H/.claude/rules" "$H/.claude/commands" "$H/.claude/agents" "$H/.claude/skills"
            "$H/.claude/output-styles" "$H/.claude/plugins")
@@ -47,22 +53,29 @@ esac
 [ "$(id -u)" = 0 ] || { echo "coder-acp-sandbox: run it through sudo" >&2; exit 1; }
 dir=$(pwd -P 2>/dev/null) || dir=$WORK
 case "$dir" in "$WORK"|"$WORK"/*) ;; *) dir=$WORK ;; esac
-# systemd binds a symlink's target; the link itself could then be replaced from inside
+# systemd binds a symlink's target (the link itself could then be replaced from inside); a hard link
+# elsewhere would be a writable name for a protected file
 for p in "${PROTECTED[@]}"; do
-  if [ -L "$p" ] || [ ! -e "$p" ]; then
-    echo "coder-acp-sandbox: $p is missing or a symlink; run: sudo claw-install" >&2; exit 1
+  if [ -L "$p" ] || [ ! -e "$p" ] || { [ -f "$p" ] && [ "$(stat -c %h -- "$p")" != 1 ]; }; then
+    echo "coder-acp-sandbox: $p is missing, a symlink or hard-linked; run: sudo claw-install" >&2; exit 1
   fi
 done
 
-# Mount-based options only: the seccomp-based ones (PrivateDevices, RestrictSUIDSGID, LockPersonality,
-# ProtectClock, ...) imply NoNewPrivileges for a service with User=, and agent-git needs sudo.
-props=(-p User=coder -p Group=coder -p "WorkingDirectory=$dir"
+# No NoNewPrivileges, and nothing that sets it (agent-git needs sudo).
+props=(-p "WorkingDirectory=$dir" -E "HOME=$H" -E USER=coder -E LOGNAME=coder
        -p ProtectSystem=strict -p ProtectHome=read-only -p PrivateTmp=yes
        -p ProtectKernelTunables=yes -p ProtectControlGroups=yes)
 for p in "${WRITABLE[@]}"; do props+=(-p "ReadWritePaths=$p"); done
 for p in "${PROTECTED[@]}"; do props+=(-p "ReadOnlyPaths=$p"); done
-unit=coder-acp-$$
-trap 'systemctl stop "$unit.service" 2>/dev/null; exit 143' TERM INT HUP
+unit=coder-acp-$$-$RANDOM
+stop() {
+  kill "$run" 2>/dev/null || true; systemctl stop "$unit.service" 2>/dev/null || true; wait "$run" 2>/dev/null || true
+  exit "$1"
+}
+trap 'stop 143' TERM; trap 'stop 130' INT; trap 'stop 129' HUP
 # <&0: a background job's stdin would otherwise be /dev/null, and stdin is the ACP stream
-systemd-run --quiet --pipe --wait --collect --service-type=exec --unit="$unit" "${props[@]}" "$cmd" <&0 &
-wait $!
+systemd-run --quiet --pipe --wait --collect --service-type=exec --unit="$unit" "${props[@]}" \
+  unshare --pid --fork --mount-proc --kill-child \
+  setpriv --reuid=coder --regid=coder --init-groups -- "$cmd" <&0 &
+run=$!
+wait "$run"

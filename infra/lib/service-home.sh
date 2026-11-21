@@ -24,18 +24,32 @@ as_user() { local u=$1; shift; (cd / && sudo -n -u "$u" -- "$@"); }
 # root-owned as Claude Code's managed memory file, and the managed settings that turn hooks, MCP
 # servers, plugin marketplaces and auto-memory off for every session (coder can read them, not change
 # them). Plus, as coder, the paths in ~/.claude that coder-acp-sandbox binds read-only (a session
-# doesn't start without them): a symlink or the wrong type there is removed (a session could replace a
-# symlink: systemd binds its target), then empty ones created where missing, and the old CLAUDE.md
-# copy emptied. Claude Code's state file moves into ~/.claude (CLAUDE_CONFIG_DIR, coder-acp-run):
+# doesn't start without them). The first time (no marker in /var/lib/claw-install), whatever is there
+# is moved to ~/.claude/pre-sandbox-<time>/: sessions could write it until now, and anything they left would
+# be locked in and loaded by every session. After that, a symlink, hard-linked file or the wrong type
+# there is removed (systemd binds a symlink's target; a hard link is another, writable name), then
+# empty ones created where missing, and the old CLAUDE.md copy emptied. Claude Code's state file moves into ~/.claude (CLAUDE_CONFIG_DIR, coder-acp-run):
 # ~/.claude.json is copied there once.
 coder_home_install() {
-  local R=$CLAW_ROOT C=$CLAW_ROOT/home/coder/.claude f
+  local R=$CLAW_ROOT C=$CLAW_ROOT/home/coder/.claude f P=(settings.json settings.local.json CLAUDE.md rules commands agents skills output-styles plugins)
+  local MARK=$CLAW_ROOT/var/lib/claw-install/coder-claude-moved
   as_user coder install -d -m 700 "$R/home/coder/.config" "$C" "$R/home/coder/.cache" "$R/home/coder/.npm" \
     || { echo "install.sh: couldn't create ~coder/.config, .claude, .cache or .npm as coder" >&2; return 1; }
   install -d -m 755 -o root -g root "$R/etc/claude-code"
   install -m 644 -o root -g root coder-CLAUDE.md "$R/etc/claude-code/CLAUDE.md"
   install -m 644 -o root -g root coder-managed-settings.json "$R/etc/claude-code/managed-settings.json"
-  for f in settings.json settings.local.json CLAUDE.md rules commands agents skills output-styles plugins; do
+  if [ ! -e "$MARK" ]; then
+    local B; B=$C/pre-sandbox-$(date +%Y%m%d-%H%M%S)
+    as_user coder install -d -m 700 "$B" \
+      || { echo "install.sh: couldn't create $B as coder" >&2; return 1; }
+    for f in "${P[@]}"; do
+      if as_user coder test -e "$C/$f" || as_user coder test -L "$C/$f"; then
+        as_user coder mv -T "$C/$f" "$B/$f" \
+          || { echo "install.sh: couldn't move ~coder/.claude/$f aside as coder" >&2; return 1; }
+      fi
+    done
+  fi
+  for f in "${P[@]}"; do
     coder_protected "$C/$f" || { echo "install.sh: couldn't set up ~coder/.claude/$f as coder" >&2; return 1; }
   done
   if ! as_user coder test -e "$C/.claude.json" && as_user coder test -f "$R/home/coder/.claude.json" \
@@ -43,14 +57,16 @@ coder_home_install() {
     as_user coder cp "$R/home/coder/.claude.json" "$C/.claude.json" \
       || echo "install.sh: couldn't copy ~coder/.claude.json into ~coder/.claude as coder" >&2
   fi
+  [ -e "$MARK" ] || { install -d -m 755 -o root -g root "${MARK%/*}" && install -m 644 -o root -g root /dev/null "$MARK"; }
 }
 
-# coder_protected <path>: as coder, make <path> a real file (*.json, CLAUDE.md) or directory, not a
-# symlink. Existing contents are kept, except CLAUDE.md: the copy older installs put there, emptied.
+# coder_protected <path>: as coder, make <path> a real file (*.json, CLAUDE.md) with one link, or a
+# directory, not a symlink. Existing contents are kept, except CLAUDE.md (emptied).
 coder_protected() {
   local p=$1 t=-d
   case $p in *.json|*.md) t=-f ;; esac
-  if as_user coder test -L "$p" || { as_user coder test -e "$p" && ! as_user coder test "$t" "$p"; }; then
+  if as_user coder test -L "$p" || { as_user coder test -e "$p" && ! as_user coder test "$t" "$p"; } \
+     || { [ $t = -f ] && as_user coder test -e "$p" && [ "$(as_user coder stat -c %h "$p")" != 1 ]; }; then
     as_user coder rm -rf "$p" || return 1
   fi
   case $p in

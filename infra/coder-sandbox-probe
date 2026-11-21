@@ -31,6 +31,9 @@ want read-only "$H"
 want read-only "$H/.claude.json"
 want read-only /etc
 want read-only /usr/local/bin
+# its own PID namespace: no other process's /proc/<pid>/root (the host's view) in reach
+if [ "$(cat /proc/1/comm 2>/dev/null)" != systemd ] && [ "$(ls -d /proc/[0-9]* | wc -l)" -lt 50 ]; then
+  echo "ok   own PID namespace"; else echo "BAD  host processes are visible"; bad=1; fi
 # agent-git runs through sudo, which no_new_privs would stop
 if grep -q '^NoNewPrivs:[[:space:]]*0$' /proc/self/status; then echo "ok   sudo can work (no_new_privs off)"
 else echo "BAD  no_new_privs is on: sudo -u gitbot agent-git can't work"; bad=1; fi

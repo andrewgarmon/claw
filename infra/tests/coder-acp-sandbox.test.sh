@@ -35,9 +35,11 @@ list() { bash -c '. <(sed -n "/^H=/,/^cmd=/p" "$2" | sed "\$d"); printf "%s\n" "
 protected
 run "$W/repo"
 check "runs coder-acp-run as coder through systemd-run, with the caller's stdio, waiting for it" \
-  eval '[ $rc = 0 ] && arg User=coder && arg Group=coder && arg --pipe && arg --wait && [ "$(tail -n1 "$T/args")" = /usr/local/lib/claw/coder-acp-run ]'
+  eval '[ $rc = 0 ] && arg --pipe && arg --wait && [ "$(tail -n1 "$T/args")" = /usr/local/lib/claw/coder-acp-run ] && arg "HOME=$TH" && arg USER=coder'
+check "its own PID namespace, then coder with no capabilities: unshare --pid --mount-proc, setpriv" \
+  eval '[ "$(sed -n "/^unshare\$/,\$p" "$T/args" | tr "\n" " ")" = "unshare --pid --fork --mount-proc --kill-child setpriv --reuid=coder --regid=coder --init-groups -- /usr/local/lib/claw/coder-acp-run " ] && ! grep -q "^User=" "$T/args"'
 check "the ACP stream (stdin) reaches systemd-run" eval '[ "$(cat "$T/stdin")" = acp-in ]'
-check "a unit of its own, named after the launcher" eval 'grep -qxE -- "--unit=coder-acp-[0-9]+" "$T/args"'
+check "a unit of its own, named after the launcher" eval 'grep -qxE -- "--unit=coder-acp-[0-9]+-[0-9]+" "$T/args"'
 check "read-only system and home, private /tmp" eval 'arg ProtectSystem=strict && arg ProtectHome=read-only && arg PrivateTmp=yes'
 check "the session works in the caller's repo" eval 'arg "WorkingDirectory=$W/repo"'
 check "no option that implies NoNewPrivileges (agent-git needs sudo)" \
@@ -49,7 +51,7 @@ check "writable: /srv/work, Claude Code's session data" \
   eval 'arg "ReadWritePaths=$W" && arg "ReadWritePaths=$TH/.claude" && ! grep -q "claude\.json" "$T/args"'
 for conf in "$INFRA"/brokers/*/broker.conf; do
   callers=$(sed -n 's/^CALLERS="\(.*\)"/\1/p' "$conf"); u=$(sed -n 's/^USER=//p' "$conf")
-  case " $callers " in *" coder "*) check "broker $u (coder may call it, so it runs in the sandbox): its home is writable" arg "ReadWritePaths=/home/$u" ;; esac
+  case " $callers " in *" coder "*) check "broker $u (coder may call it, so it runs in the sandbox): its home is writable" eval 'arg "ReadWritePaths=/home/$u" || arg "ReadWritePaths=-/home/$u"' ;; esac
 done
 
 run "$T/elsewhere"
@@ -58,7 +60,7 @@ run "$W/link-out"
 check "a symlink in /srv/work pointing outside: resolved, so /srv/work" eval '[ $rc = 0 ] && arg "WorkingDirectory=$W"'
 run "$W/repo" --check
 check "--check runs the probe in the same sandbox" \
-  eval '[ $rc = 0 ] && [ "$(tail -n1 "$T/args")" = /usr/local/lib/claw/coder-sandbox-probe ] && arg ProtectHome=read-only'
+  eval '[ $rc = 0 ] && [ "$(tail -n1 "$T/args")" = /usr/local/lib/claw/coder-sandbox-probe ] && arg ProtectHome=read-only && arg unshare'
 run "$W/repo" /bin/sh
 check "any other argument: refused, nothing started" eval '[ $rc = 2 ] && [ ! -e "$T/args" ]'
 touch "$T/not_root"; run "$W/repo"
@@ -70,14 +72,21 @@ for p in settings.json skills; do
   rm "$TH/.claude/$p"; run "$W/repo"
   check "coder's .claude/$p missing: refused, nothing started" eval '[ $rc = 1 ] && [ ! -e "$T/args" ]'
 done
-protected
-# a signal to the launcher (acpx cancelling, the gateway stopping, a timeout) stops the unit
-touch "$T/slow"; rm -f "$T/systemctl"
-(cd "$W/repo" && exec bash "$S" < /dev/null > "$T/out" 2>&1) & pid=$!
-for _ in $(seq 50); do [ -e "$T/args" ] && break; sleep 0.1; done
-kill -TERM "$pid"; wait "$pid"; rc=$?; rm "$T/slow"
-check "SIGTERM: stops its unit, exits 143" eval '[ $rc = 143 ] && [ "$(cat "$T/systemctl" 2>/dev/null)" = "$(printf "stop\ncoder-acp-%s.service" "$pid")" ]'
-pkill -f "$BIN/systemd-run" 2>/dev/null
+protected; ln "$TH/.claude/settings.json" "$TH/.claude/x"; run "$W/repo"
+check "a protected file with a second (hard) link: refused, nothing started" eval '[ $rc = 1 ] && [ ! -e "$T/args" ]'
+rm "$TH/.claude/x"
+# a signal to the launcher (acpx cancelling, the gateway stopping, a timeout) stops the unit, and
+# systemd-run with it (in case the unit didn't exist yet)
+for sig in TERM:143 INT:130 HUP:129; do
+  touch "$T/slow"; rm -f "$T/systemctl" "$T/args"
+  (cd "$W/repo" && exec bash "$S" < /dev/null > "$T/out" 2>&1) & pid=$!
+  for _ in $(seq 50); do [ -e "$T/args" ] && break; sleep 0.1; done
+  kill -"${sig%:*}" "$pid"; wait "$pid"; rc=$?; rm "$T/slow"
+  unit=$(sed -n 's/^--unit=//p' "$T/args")
+  check "SIG${sig%:*}: stops its unit and systemd-run, exits ${sig#*:}" \
+    eval '[ $rc = "${sig#*:}" ] && [ "$(cat "$T/systemctl" 2>/dev/null)" = "$(printf "stop\n%s.service" "$unit")" ] && ! pgrep -f "$BIN/systemd-run" >/dev/null'
+  pkill -f "$BIN/systemd-run" 2>/dev/null
+done
 
 # coder-acp: nothing but the hand-over
 sed "s|^export PATH=.*|export PATH=$BIN:/usr/bin:/bin|" "$INFRA/coder-acp" > "$T/coder-acp"
@@ -87,7 +96,7 @@ check "coder-acp hands over to the sandbox: sudo -n, no arguments" eval '[ "$(ca
 # they agree with each other
 probe=$(sed -n 's/^for p in \(settings.json.*\); do$/\1/p' "$INFRA/coder-sandbox-probe" | tr ' ' '\n' | sed 's|^|/home/coder/.claude/|')
 check "the probe checks every read-only path" eval '[ "$(list PROTECTED | sort)" = "$(sort <<< "$probe")" ]'
-made=$(sed -n 's/^  for f in \(settings.json.*\); do$/\1/p' "$INFRA/lib/service-home.sh" | tr ' ' '\n' | sed 's|^|/home/coder/.claude/|')
+made=$(sed -n 's/.* P=(\(settings.json[^)]*\))$/\1/p' "$INFRA/lib/service-home.sh" | tr ' ' '\n' | sed 's|^|/home/coder/.claude/|')
 for p in $(list PROTECTED); do
   check "install.sh creates ${p#/home/coder/} (the sandbox won't start without it)" grep -qxF -- "$p" <<< "$made"
 done

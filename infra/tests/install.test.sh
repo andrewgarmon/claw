@@ -68,19 +68,21 @@ run
 check "upgrade: no errors or warnings" eval '[ $rc = 0 ] && [ ! -s "$T/out" ]'
 check "coder's dirs created as coder, mode 700" \
   eval 'called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.config][$R/home/coder/.claude][$R/home/coder/.cache][$R/home/coder/.npm]" && [ "$(stat -c %a "$R/home/coder/.config")" = 700 ]'
-check "the dirs the sandbox binds: created as coder, mode 700, contents kept" \
-  eval 'for d in rules commands agents skills output-styles plugins; do called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.claude/$d]" && [ -d "$R/home/coder/.claude/$d" ] && [ ! -L "$R/home/coder/.claude/$d" ] || exit 1; done && [ "$(cat "$R/home/coder/.claude/skills/x")" = s ]'
-check "a symlink or a file where the sandbox binds a dir: removed as coder, a dir made" \
-  eval 'called "sudo[-n][-u][coder][--][rm][-rf][$R/home/coder/.claude/agents]" && called "sudo[-n][-u][coder][--][rm][-rf][$R/home/coder/.claude/rules]" && [ -d "$R/home/coder/.config" ]'
+B=$(ls -d "$R"/home/coder/.claude/pre-sandbox-* 2>/dev/null)
+check "first install with the sandbox: what sessions could write is moved aside, as coder" \
+  eval '[ -n "$B" ] && [ "$(cat "$B/settings.local.json")" = mine ] && [ "$(cat "$B/skills/x")" = s ] && [ -L "$B/agents" ] && [ "$(cat "$B/rules")" = f ] && [ "$(cat "$B/CLAUDE.md")" = old ] && grep -q "^sudo\[-n\]\[-u\]\[coder\]\[--\]\[mv\]\[-T\]" "$T/calls"'
+check "the dirs the sandbox binds: created empty as coder, mode 700" \
+  eval 'for d in rules commands agents skills output-styles plugins; do called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.claude/$d]" && [ -d "$R/home/coder/.claude/$d" ] && [ ! -L "$R/home/coder/.claude/$d" ] || exit 1; done && [ -z "$(ls -A "$R/home/coder/.claude/skills")" ]'
+check "the move happens once: root-owned marker in /var/lib/claw-install" eval '[ -e "$R/var/lib/claw-install/coder-claude-moved" ]'
 check "CLAUDE.md installed root:root 644 as Claude Code's managed memory, /etc/claude-code/CLAUDE.md" \
   eval 'called "install[-m][644][-o][root][-g][root][coder-CLAUDE.md][$R/etc/claude-code/CLAUDE.md]" && cmp -s coder-CLAUDE.md "$R/etc/claude-code/CLAUDE.md" && called "install[-d][-m][755][-o][root][-g][root][$R/etc/claude-code]"'
 check "managed settings installed root:root 644: hooks, MCP servers, marketplaces and auto-memory off" \
   eval 'called "install[-m][644][-o][root][-g][root][coder-managed-settings.json][$R/etc/claude-code/managed-settings.json]" && python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"allowManagedHooksOnly\"] is True and d[\"allowedMcpServers\"] == [] and d[\"disableAllHooks\"] is True and d[\"autoMemoryEnabled\"] is False and d[\"strictKnownMarketplaces\"] == [] else 1)" "$R/etc/claude-code/managed-settings.json"'
-check "settings files the sandbox binds: created as coder with {} when missing, kept when there" \
-  eval '[ "$(cat "$R/home/coder/.claude/settings.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude/settings.local.json")" = mine ]'
+check "settings files the sandbox binds: created as coder with {}" \
+  eval '[ "$(cat "$R/home/coder/.claude/settings.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude/settings.local.json")" = "{}" ]'
 check "coder's .claude.json copied into its .claude as coder (Claude Code's state file moves there)" \
   eval 'called "sudo[-n][-u][coder][--][cp][$R/home/coder/.claude.json][$R/home/coder/.claude/.claude.json]" && [ "$(cat "$R/home/coder/.claude/.claude.json")" = "{\"state\":1}" ]'
-check "the old CLAUDE.md in coder's home is emptied, as coder" \
+check "coder's CLAUDE.md is an empty file, as coder" \
   eval 'called "sudo[-n][-u][coder][--][install][-m][600][/dev/null][$R/home/coder/.claude/CLAUDE.md]" && [ -f "$R/home/coder/.claude/CLAUDE.md" ] && [ ! -s "$R/home/coder/.claude/CLAUDE.md" ]'
 check "drop-ins installed root:root 644 in /etc/systemd/user/openclaw-gateway.service.d/" \
   eval 'called "install[-d][-m][755][-o][root][-g][root][$R$DD]" && grep -q "^install\[-m\]\[644\]\[-o\]\[root\]\[-g\]\[root\]\[gateway-dropins/.*\]\[$R$DD/\]$" "$T/calls" && for f in gateway-dropins/*.conf; do cmp -s "$f" "$R$DD/${f##*/}" || exit 1; done'
@@ -88,6 +90,21 @@ check "a drop-in no longer in the repo is removed from /etc" eval '[ ! -e "$R$DD
 check "the old drop-ins in openclaw's home are removed, as openclaw; its own drop-ins are kept" \
   eval 'grep -q "^sudo\[-n\]\[-u\]\[openclaw\]\[--\]\[rm\]\[-f\]\[$R$OLD/" "$T/calls" && for f in gateway-dropins/*.conf; do [ ! -e "$R$OLD/${f##*/}" ] || exit 1; done && [ -e "$R$OLD/mine.conf" ]'
 check "root never names a path under a home" eval '! root_in_home'
+
+# ---------- later installs: contents kept, symlinks, hard links and wrong types replaced ----------
+C=$R/home/coder/.claude
+echo mine > "$C/settings.local.json"; echo s > "$C/skills/x"; echo mine > "$C/CLAUDE.md"
+rm -rf "$C/agents" "$C/rules"; ln -s "$R/home/coder/.config" "$C/agents"; echo f > "$C/rules"
+echo '{"a":1}' > "$C/settings.json"; ln "$C/settings.json" "$C/linked"
+run
+check "later install: no errors" eval '[ $rc = 0 ] && [ ! -s "$T/out" ] && [ "$(ls -d "$C"/pre-sandbox-* | wc -l)" = 1 ]'
+check "later install: contents kept (CLAUDE.md emptied)" \
+  eval '[ "$(cat "$C/settings.local.json")" = mine ] && [ "$(cat "$C/skills/x")" = s ] && [ ! -s "$C/CLAUDE.md" ]'
+check "later install: a symlink or a file where a dir is bound: removed as coder, a dir made" \
+  eval 'called "sudo[-n][-u][coder][--][rm][-rf][$C/agents]" && called "sudo[-n][-u][coder][--][rm][-rf][$C/rules]" && [ -d "$C/agents" ] && [ ! -L "$C/agents" ] && [ -d "$C/rules" ] && [ -d "$R/home/coder/.config" ]'
+check "later install: a hard-linked protected file is replaced by a new one" \
+  eval '[ "$(stat -c %h "$C/settings.json")" = 1 ] && [ "$(cat "$C/settings.json")" = "{}" ] && [ "$(cat "$C/linked")" = "{\"a\":1}" ]'
+check "later install: root never names a path under a home" eval '! root_in_home'
 
 # ---------- the drop-ins themselves ----------
 check "heap.conf sets the heap through NODE_OPTIONS" \
