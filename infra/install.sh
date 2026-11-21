@@ -70,6 +70,8 @@ install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
 # nightly run. Created as openclaw: root never writes under a service user's home.
 (cd / && sudo -u openclaw sh -c '[ -e "$1/last-ok" ] || { mkdir -p "$1" && touch "$1/last-ok"; }' _ /home/openclaw/.cache/claw-backup)
 install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
+# auto-install: claw-install --auto every 2 min (claw-install updates /usr/local/sbin/claw-install itself)
+install -m 644 -o root -g root claw-install-auto.service claw-install-auto.timer /etc/systemd/system/
 # claw-sync (as openclaw) reads the installed commit to say when an install is pending. claw-install
 # writes it 644, but a copy from before that wrote it 600, and the first install after the change
 # still runs that old copy: this fixes the mode on the run after.
@@ -111,7 +113,16 @@ sudo -H -u coder git -C /home/coder config --global user.email claude@claw.inval
 gateway_dropins_install
 
 systemctl daemon-reload
-systemctl enable --now claw-sync.timer claw-backup.timer claw-denywatch.timer
+systemctl enable --now claw-backup.timer claw-denywatch.timer
+# claw-install pauses claw-sync around an install and starts its timer again itself
+if [ "${CLAW_SYNC_PAUSED:-}" = 1 ]; then systemctl enable claw-sync.timer; else systemctl enable --now claw-sync.timer; fi
+# installs by hand only (sudo claw-install) while /etc/claw/manual-install exists
+if [ -e /etc/claw/manual-install ]; then
+  systemctl disable --now claw-install-auto.timer 2>/dev/null || true
+else
+  systemctl enable --now claw-install-auto.timer
+  [ -s /etc/claw/install.url ] || echo "TODO: healthchecks.io ping URL for auto-install in /etc/claw/install.url, root 600 (infra/README.md: Applying infra)"
+fi
 # redact-sync only once gitbot has a list and the root-only token exists (without them every run
 # fails); disabled otherwise, so a re-run of claw-install never turns it on early
 if as_user gitbot test -s /home/gitbot/.config/redact.txt && [ -s /etc/claw/redact-sync-token ]; then
@@ -130,4 +141,4 @@ as_user coder test -x /home/coder/.local/bin/claude || echo "TODO: install + log
 [ -s /etc/claw/denywatch.url ] || echo "TODO: healthchecks.io ping URL for broker refusal alerts in /etc/claw/denywatch.url, root 600 (infra/README.md: broker refusal alerts)"
 cmp -s acp/package-lock.json "$ACP/package-lock.json" && [ -x "$ACP/node_modules/.bin/claude-agent-acp" ] \
   || echo "TODO: the pinned ACP adapter isn't installed (needs Node/npm; README: Claude Code). Re-run: sudo claw-install"
-echo "installed. If drop-ins changed: sudo -u openclaw XDG_RUNTIME_DIR=/run/user/\$(id -u openclaw) systemctl --user daemon-reload, then restart the gateway"
+echo "installed"
