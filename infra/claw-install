@@ -10,9 +10,9 @@
 #
 # --auto (claw-install-auto.timer, every 2 min): the same without asking, only when origin/main has
 # moved. The gate is the owner's merge on GitHub: only main is installed, from GitHub, never from the
-# agent-writable checkout, and nothing the agent's user runs can start this. A commit that fails to
-# install or check is not retried until main moves or someone runs sudo claw-install; until then every
-# run fails, so its healthchecks check (unit-ping) stays down.
+# agent-writable checkout, and nothing the agent's user runs can start this. A commit that failed to
+# install or check (here or in a manual run) is not retried until main moves or a manual install of it
+# succeeds; until then every run fails, so its healthchecks check (unit-ping) stays down.
 #
 # Installed root-owned to /usr/local/sbin/claw-install (it updates itself from the clone after
 # each install). First install: see infra/README.md ("Applying infra").
@@ -57,17 +57,18 @@ oc() { (cd / && sudo -n -H -u "$OC_USER" env XDG_RUNTIME_DIR="/run/user/$(id -u 
           PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" "$@"); }
 gw_pid() { oc systemctl --user show -p MainPID --value openclaw-gateway 2>/dev/null; }
 
-# Pause claw-sync (its timer stopped, any run in progress finished), so a deploy restart can't overlap
-# one of ours; the timer is started again on any exit (cleanup).
+# Pause claw-sync (its timer stopped, any run in progress finished) so none of its deploys overlaps
+# the install or a restart here; sync_resume starts the timer again, and so does any exit (cleanup).
 sync_pause() {
   local end=$((SECONDS + DEPLOY_WAIT))
-  [ -n "$PAUSED" ] && return 0
+  [ -z "$PAUSED" ] || return 0
   systemctl stop claw-sync.timer; PAUSED=1
   while [[ $(systemctl show -p ActiveState --value claw-sync.service) =~ ^(activating|deactivating)$ ]]; do
     [ "$SECONDS" -lt "$end" ] || die "claw-sync is still running after ${DEPLOY_WAIT}s"
     sleep "$POLL"
   done
 }
+sync_resume() { [ -z "$PAUSED" ] || { systemctl start claw-sync.timer && PAUSED=; }; }
 wait_healthy() {  # wait_healthy <what happened>
   local end=$((SECONDS + HEALTH_WAIT))
   until oc systemctl --user is-active -q openclaw-gateway && oc openclaw gateway health --timeout 10000 >/dev/null 2>&1; do
@@ -81,22 +82,26 @@ restart_gateway() {
   echo "restarting the gateway (plugin code or its drop-ins changed)"
   oc systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2
   wait_healthy "the restart"
+  sync_resume
 }
 
 # update_openclaw <repo>: put the host on the OpenClaw version infra/openclaw/package.json pins, through
 # OpenClaw's own updater as openclaw (it stops, replaces and restarts the gateway, and recovers if the
-# new one doesn't come up), with claw-sync paused. Not when nothing is pinned or it already matches.
+# new one doesn't come up). Runs with claw-sync paused (main pauses it before recording the install,
+# so config that needs the new version can't deploy before it). Not when nothing is pinned or it
+# already matches.
+oc_version() { oc openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?' | head -1; }
 update_openclaw() {
   local want have
-  want=$(sed -n 's/^ *"openclaw": *"\([^"]*\)".*/\1/p' "$1/infra/openclaw/package.json" 2>/dev/null | head -1)  || true
+  want=$(sed -n 's/^ *"openclaw": *"\([^"]*\)".*/\1/p' "$1/infra/openclaw/package.json" 2>/dev/null | head -1) || true
   [ -n "$want" ] || return 0
-  [[ $want =~ ^[0-9]{4}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || die "infra/openclaw/package.json: \"$want\" isn't an exact OpenClaw version"
-  have=$(oc openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1) || true
+  [[ $want =~ ^[0-9]{4}\.[0-9]{1,3}\.[0-9]{1,3}(-[0-9]+)?$ ]] || die "infra/openclaw/package.json: \"$want\" isn't an exact OpenClaw version"
+  have=$(oc_version) || true
   [ "$have" != "$want" ] || return 0
   echo "updating OpenClaw ${have:-(unknown)} -> $want (openclaw update, as $OC_USER)"
   sync_pause
   oc openclaw update --tag "$want" --yes --timeout 900 || die "openclaw update to $want failed (see above; it keeps or restores the previous version)"
-  have=$(oc openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1) || true
+  have=$(oc_version) || true
   [ "$have" = "$want" ] || die "openclaw update finished, but openclaw --version says ${have:-nothing}, not $want"
   wait_healthy "the OpenClaw update"
 }
@@ -116,24 +121,24 @@ wait_deployed() {
   done
 }
 
-# reload_gateway <repo> <last> <sha> <gateway pid before the install>: get the running gateway onto what
-# was just installed (an OpenClaw update counts as its restart), with one
-# restart at most. If openclaw.json changed, claw-sync deploys it now (it was waiting for this install)
-# and restarts the gateway when the config differs from what's running. Plugin code and drop-ins load
-# only at start, so if they changed and the gateway hasn't restarted since, restart it here.
+# reload_gateway <repo> <last> <sha> <gateway pid before the install>: get the running gateway onto
+# what was just installed, with one restart at most (an OpenClaw update counts as one). claw-sync
+# deploys <sha> now (it held the commit back for this install) and restarts the gateway if
+# openclaw.json differs from what's running. Plugin code and drop-ins load only at start, so if they
+# changed and the gateway hasn't restarted since, restart it here. An empty <last> means everything
+# changed.
 reload_gateway() {
   local r=$1 last=$2 sha=$3 pid=$4 changed
   if [ -n "$last" ] && git -C "$r" cat-file -e "$last^{commit}" 2>/dev/null; then
-    changed=$(git -C "$r" diff --name-only "$last" "$sha" -- openclaw.json infra/openclaw-plugins infra/gateway-dropins)
+    changed=$(git -C "$r" diff --name-only "$last" "$sha" -- infra/openclaw-plugins infra/gateway-dropins)
   else
-    changed="infra/openclaw-plugins (nothing recorded: assume everything changed)"
+    changed="infra/gateway-dropins/ (nothing recorded: assume everything changed)"
   fi
-  [ -n "$changed" ] || return 0
   if grep -q '^infra/gateway-dropins/' <<< "$changed"; then
     oc systemctl --user daemon-reload || die "systemctl --user daemon-reload as $OC_USER failed"
   fi
-  ! grep -qx openclaw.json <<< "$changed" || wait_deployed "$sha"
-  if grep -q '^infra/' <<< "$changed" && [ "$(gw_pid)" = "$pid" ]; then restart_gateway; fi
+  wait_deployed "$sha"
+  if [ -n "$changed" ] && [ "$(gw_pid || true)" = "$pid" ]; then restart_gateway; fi
 }
 
 page() { if command -v less >/dev/null; then less -R; else cat; fi; }
@@ -179,7 +184,7 @@ cleanup() {
   local rc=$?
   [ -z "$WORK" ] || rm -rf "$WORK"
   [ -z "$PAUSED" ] || systemctl start claw-sync.timer || echo "claw-install: couldn't start claw-sync.timer again" >&2
-  # --auto: a commit that failed isn't tried again until main moves (or a manual install succeeds)
+  # a commit that failed isn't tried again by --auto until main moves (or a manual install succeeds)
   if [ "$rc" != 0 ] && [ -n "$ATTEMPT" ]; then echo "$ATTEMPT" > "$STATE/failed"; fi
   exit "$rc"
 }
@@ -202,18 +207,18 @@ main() {
     flock -n 8 || exit 0
   elif ! flock -n 8; then
     echo "another claw-install is running (the auto-install?); waiting for it"
-    flock -w 3600 8 || die "still running after an hour"
+    flock -w 5400 8 || die "still running after 90 minutes"
   fi
 
-  local r sha last="" failed="" pid
+  local r sha last="" failed="" prev pid
   if [ -f "$STATE/last" ]; then
     last=$(head -c 40 "$STATE/last")
     [[ "$last" =~ ^[0-9a-f]{40}$ ]] || last=
   fi
+  failed=$(head -c 40 "$STATE/failed" 2>/dev/null) || true
   if [ "$AUTO" = 1 ]; then
     sha=$("${GIT[@]}" ls-remote "$REPO" refs/heads/main 2>/dev/null | cut -f1) || true
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "couldn't read origin/main (offline?); next run tries again"; exit 0; }
-    failed=$(head -c 40 "$STATE/failed" 2>/dev/null) || true
     [ "$sha" != "$failed" ] || die "${sha:0:7} failed to install or check (journalctl -u claw-install-auto); waiting for a new merge, or run: sudo claw-install"
     [ "$sha" != "$last" ] || exit 0
   fi
@@ -224,15 +229,20 @@ main() {
   "${GIT[@]}" clone -q --no-tags --single-branch --branch main "$REPO" "$r" \
     || die "clone of $REPO failed (a private repo needs a read-only token in $TOKEN_FILE)"
   sha=$(git -C "$r" rev-parse HEAD)
-  if [ "$AUTO" = 1 ] && [ -n "$last" ] && git -C "$r" merge-base --is-ancestor "$last" "$sha" 2>/dev/null \
+  if [ "$AUTO" = 1 ] && [ -z "$failed" ] && [ -n "$last" ] && git -C "$r" merge-base --is-ancestor "$last" "$sha" 2>/dev/null \
      && git -C "$r" diff --quiet "$last" "$sha" -- infra/ backup.age.pub; then
     record "$sha"; exit 0   # nothing to install: just move the marker claw-sync compares against
   fi
-  [ "$AUTO" = 0 ] || ATTEMPT=$sha
 
   confirm "$r" "$sha" "$last"
+  ATTEMPT=$sha
+  # after a failed attempt, last may be a commit whose restart or check never happened: redo them all
+  prev=$last; [ -z "$failed" ] || prev=
+  pid=$(gw_pid || true)
+  # claw-sync holds this commit back until record; paused, none of its deploys runs during the install
+  # or (after record) before OpenClaw is on the version the new config may need
+  sync_pause
 
-  pid=$(gw_pid)
   echo "running infra/install.sh from ${sha:0:7}"
   # the clone stays private (its dir is 700); installed files get the usual sudo umask
   (umask 022; CLAW_INSTALL_SHA=$sha bash "$r/infra/install.sh") || die "install.sh failed; nothing recorded"
@@ -246,7 +256,8 @@ main() {
   fi
   echo "installed ${sha:0:7}"
   update_openclaw "$r"
-  reload_gateway "$r" "$last" "$sha" "$pid"
+  sync_resume
+  reload_gateway "$r" "$prev" "$sha" "$pid"
 
   # check the live wiring (read-only). A failure doesn't undo the install, but it's the last line.
   if [ -x "$SMOKE" ]; then

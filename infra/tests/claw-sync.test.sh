@@ -468,6 +468,9 @@ run; check "pinned private commit can't be fetched: stays put, no ping yet" eval
 run; run; check "... and after FETCH_FAIL_RUNS in a row: fail ping" eval '[ $rc = 1 ] && head_is $c43 && pinged /fail "private submodule"'
 git -C "$T/pdev" push -q origin main 2>/dev/null
 run; check "pushed: deploys, healthy" eval '[ $rc = 0 ] && head_is $c44 && sub_head $p4'
+echo KEEP > "$O/.env"; git -C "$P_" config core.worktree ../../../..; echo x > "$O/workspace/private/planted2.md"
+run; check "submodule core.worktree pointed at ~/.openclaw: put back, state outside it untouched" \
+  eval '[ "$(cat "$O/.env")" = KEEP ] && [ "$(git -C "$P_" rev-parse --show-toplevel)" = "$(cd "$P_" && pwd -P)" ] && [ ! -e "$P_/planted2.md" ] && sub_head $p4'
 git -C "$O" submodule deinit -q -f workspace/private
 run; check "submodule de-initialised: checked out again" eval '[ $rc = 0 ] && sub_head $p4'
 

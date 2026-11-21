@@ -144,7 +144,7 @@ check_version() {
   [ -n "$want" ] || { SKIP openclaw-version "no pinned version in $OC_PIN"; return; }
   uid=$(id -u openclaw 2>/dev/null) || { FAIL openclaw-version "no openclaw user"; return; }
   have=$(timeout "$WAIT" sudo -n -u openclaw env HOME="$OC_HOME" PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" \
-    XDG_RUNTIME_DIR="/run/user/$uid" openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -1)
+    XDG_RUNTIME_DIR="/run/user/$uid" openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?' | head -1)
   [ "$have" = "$want" ] || { FAIL openclaw-version "OpenClaw is ${have:-unknown} but infra/openclaw pins $want (re-run: sudo claw-install)"; return; }
   PASS openclaw-version
 }

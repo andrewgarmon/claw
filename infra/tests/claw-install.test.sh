@@ -42,22 +42,29 @@ printf '[%s]' "\$@" >> "$T/git.log"; echo >> "$T/git.log"
 exec /usr/bin/git "\$@"
 EOF
 # fake sudo -u openclaw: runs the command here, keeping the fakes on PATH. Reading claw-sync's good
-# file while $T/sync_restarts exists also restarts the gateway (as claw-sync's deploy would).
+# file plays claw-sync: unless its timer is stopped or $T/sync_stuck exists, it has deployed origin/main
+# (and restarted the gateway, if $T/sync_restarts exists).
 cat > "$BIN/sudo" <<EOF
 #!/bin/bash
 while [ "\${1:0:1}" = - ]; do [ "\$1" = -u ] && shift; shift; done
 a=(); for x in "\$@"; do case \$x in PATH=*) a+=("PATH=$BIN:/usr/bin:/bin") ;; *) a+=("\$x") ;; esac; done
-[ "\${a[-2]:-}" = cat ] && [ "\${a[-1]##*/}" = good ] && [ -e "$T/sync_restarts" ] && echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid"
+if [ "\${a[-2]:-}" = cat ] && [ "\${a[-1]##*/}" = good ] && [ ! -e "$T/sync_stopped" ] && [ ! -e "$T/sync_stuck" ]; then
+  git -C "$T/oc/.openclaw" fetch -q origin main 2>/dev/null && git -C "$T/oc/.openclaw" rev-parse FETCH_HEAD > "$T/oc/.cache/claw-sync/good"
+  [ -e "$T/sync_restarts" ] && echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid"
+fi
 exec "\${a[@]}"
 EOF
-# fake systemctl: logs each call; the gateway's MainPID changes on restart
+# fake systemctl: logs each call; the gateway's MainPID changes on restart (and can't be read while
+# $T/no_bus exists); $T/sync_stopped while claw-sync's timer is stopped
 cat > "$BIN/systemctl" <<EOF
 #!/bin/bash
 echo "\$*" >> "$T/systemctl.log"
 case "\$*" in
-  "--user show -p MainPID --value openclaw-gateway") cat "$T/gwpid" ;;
+  "--user show -p MainPID --value openclaw-gateway") [ ! -e "$T/no_bus" ] || exit 1; cat "$T/gwpid" ;;
   "--user restart openclaw-gateway") echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid" ;;
   "show -p ActiveState --value claw-sync.service") echo inactive ;;
+  "stop claw-sync.timer") touch "$T/sync_stopped" ;;
+  "start claw-sync.timer") rm -f "$T/sync_stopped" ;;
 esac
 exit 0
 EOF
@@ -68,7 +75,7 @@ cat > "$BIN/openclaw" <<EOF
 case "\$1" in
   gateway) [ ! -e "$T/unhealthy" ] ;;
   --version) [ -e "$T/ocver" ] && echo "OpenClaw \$(cat "$T/ocver") (abc1234)" ;;
-  update) echo "\$*" >> "$T/update.log"; [ ! -e "$T/update_fails" ] || exit 1
+  update) echo "\$*" >> "$T/update.log"; echo "openclaw update" >> "$T/systemctl.log"; [ ! -e "$T/update_fails" ] || exit 1
           echo "\$3" > "$T/ocver"; echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid" ;;
   *) exit 2 ;;
 esac
@@ -83,6 +90,7 @@ mkdir -p "$T/dev/infra"
 fake_installer() {  # fake_installer <version>
   cat > "$T/dev/infra/install.sh" <<EOF
 #!/bin/bash
+echo install.sh >> "$T/systemctl.log"
 [ -e "$T/install_fails" ] && exit 1
 echo "$1 \$(cd "\$(dirname "\$0")" && pwd) \$(umask) \${CLAW_INSTALL_SHA:-}" >> "$T/installed"
 EOF
@@ -99,9 +107,11 @@ echo 'echo EVIL >> '"$T/installed" >> "$T/openclaw-checkout/infra/install.sh"
 # openclaw's checkout (only for "is this deployed commit past that one") and claw-sync's state
 git clone -q "$T/origin.git" "$T/oc/.openclaw"; mkdir -p "$T/oc/.cache/claw-sync"
 
+smoke_passes() { printf '#!/bin/bash\n[ ! -e "%s/sync_stopped" ] || { echo "FAIL timers: claw-sync.timer stopped"; exit 1; }\necho "PASS fake-check"\n' "$T" > "$T/claw-smoke"; chmod +x "$T/claw-smoke"; }
 fails=0
 run() { : > "$T/git.log"; : > "$T/systemctl.log"; bash "$CI" "$@" < /dev/null > "$T/out" 2>&1; rc=$?; }
 restarts() { [ "$(grep -c "^--user restart openclaw-gateway$" "$T/systemctl.log")" = "$1" ]; }
+paused_around_install() { local s i; s=$(grep -n -m1 "^stop claw-sync.timer$" "$T/systemctl.log" | cut -d: -f1); i=$(grep -n -m1 "^install.sh$" "$T/systemctl.log" | cut -d: -f1); [ -n "$s" ] && [ -n "$i" ] && [ "$s" -lt "$i" ] && [ "$(sed -n "$i,\$p" "$T/systemctl.log" | grep -m1 "claw-sync.timer")" = "start claw-sync.timer" ]; }
 paused_around_restart() { [ "$(grep -n -m1 "^stop claw-sync.timer$" "$T/systemctl.log" | cut -d: -f1)" -lt "$(grep -n -m1 "restart openclaw-gateway" "$T/systemctl.log" | cut -d: -f1)" ] && [ "$(tail -n1 "$T/systemctl.log")" = "start claw-sync.timer" ]; }
 check() {  # check <name> <condition...>
   local name=$1; shift
@@ -120,7 +130,7 @@ check "records the installed commit, readable by claw-sync (644)" eval '[ "$(las
 check "deletes the clone afterwards" work_empty
 check "installs itself from the clone" eval 'cmp -s "$T/sbin/claw-install" "$INFRA/claw-install" && says "updated $T/sbin/claw-install"'
 check "first install lists infra/" eval 'says "no previous install recorded" && says "infra/install.sh"'
-check "first install restarts the gateway once, claw-sync paused around it" eval 'restarts 1 && paused_around_restart && says "gateway healthy"'
+check "first install restarts the gateway once, claw-sync paused around the install and the restart" eval 'restarts 1 && paused_around_install && paused_around_restart && says "gateway healthy"'
 check "no claw-smoke installed: skipped quietly" eval '! says "claw-smoke"'
 check "token reaches git only through the env, never argv or output" \
   eval 'grep -q "\[clone\]" "$T/git.log" && ! grep -q "$TOKEN" "$T/git.log" "$T/out"'
@@ -143,14 +153,14 @@ check "a backup.age.pub change (outside infra/, but install.sh installs it) is i
 sha2=$(git -C "$T/dev" rev-parse HEAD)
 
 # ---------- smoke test after the install ----------
-printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"; chmod +x "$T/claw-smoke"
+smoke_passes
 run -y
 check "smoke test passes: says so last, exit 0" \
   eval '[ $rc = 0 ] && says "PASS fake-check" && [ "$(tail -n1 "$T/out")" = "installed ${sha2:0:7}; smoke test passed" ]'
 printf '#!/bin/bash\necho "FAIL fake-check: broken"\nexit 1\n' > "$T/claw-smoke"
 run -y
-check "smoke test fails: exit 1, says so last, install still recorded" \
-  eval '[ $rc = 1 ] && says "FAIL fake-check" && tail -n1 "$T/out" | grep -q "smoke test FAILED" && [ "$(last)" = "$sha2" ]'
+check "smoke test fails: exit 1, says so last, install still recorded, commit marked failed" \
+  eval '[ $rc = 1 ] && says "FAIL fake-check" && tail -n1 "$T/out" | grep -q "smoke test FAILED" && [ "$(last)" = "$sha2" ] && [ "$(cat "$T/state/failed")" = "$sha2" ]'
 rm "$T/claw-smoke"
 
 # ---------- refusals ----------
@@ -203,9 +213,8 @@ check "unknown option: usage" eval '[ $rc = 1 ] && says "usage:"'
 
 # ---------- --auto (the timer) ----------
 push() { git -C "$T/dev" add -A && git -C "$T/dev" commit -qm "$1" && git -C "$T/dev" push -q origin main 2>/dev/null; git -C "$T/dev" rev-parse HEAD; }
-deployed() { git -C "$T/oc/.openclaw" fetch -q origin main 2>/dev/null; echo "$1" > "$T/oc/.cache/claw-sync/good"; }
 failed() { [ "$(cat "$T/state/failed" 2>/dev/null)" = "$1" ]; }
-printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"; chmod +x "$T/claw-smoke"
+smoke_passes
 run -y; : > "$T/installed"; base=$(last)
 run --auto
 check "auto, main unchanged: only asks GitHub for main's commit, no clone, no output" \
@@ -219,13 +228,12 @@ run --auto
 check "auto, plugin code changed: installed without asking, one restart (claw-sync paused), smoke passes" \
   eval '[ $rc = 0 ] && [ "$(last)" = "$a2" ] && grep -q " $a2$" "$T/installed" && restarts 1 && paused_around_restart && says "smoke test passed"'
 echo 2 > "$T/dev/infra/openclaw-plugins/p/index.js"; echo '{"v":2}' > "$T/dev/openclaw.json"; a3=$(push "plugin p + config")
-deployed "$a3"; touch "$T/sync_restarts"
+touch "$T/sync_restarts"
 run --auto
 check "auto, plugin + config: claw-sync's deploy restarts the gateway, so no second restart" \
   eval '[ $rc = 0 ] && says "claw-sync deployed ${a3:0:7}" && restarts 0 && says "smoke test passed"'
 rm "$T/sync_restarts"
 echo 3 > "$T/dev/infra/openclaw-plugins/p/index.js"; echo '{"v":3}' > "$T/dev/openclaw.json"; a4=$(push "plugin p + same-as-running config")
-deployed "$a4"
 run --auto
 check "auto, plugin + config but claw-sync didn't restart (config unchanged on the host): restarts once" \
   eval '[ $rc = 0 ] && says "claw-sync deployed" && restarts 1'
@@ -234,14 +242,14 @@ run --auto
 check "auto, drop-in changed: daemon-reload as openclaw, then one restart" \
   eval '[ $rc = 0 ] && grep -q "^--user daemon-reload$" "$T/systemctl.log" && restarts 1'
 echo 4 > "$T/dev/infra/openclaw-plugins/p/index.js"; echo '{"v":4}' > "$T/dev/openclaw.json"; a6=$(push "config claw-sync rejects")
-echo "$a6" > "$T/oc/.cache/claw-sync/bad"
+echo "$a6" > "$T/oc/.cache/claw-sync/bad"; touch "$T/sync_stuck"
 run --auto
 check "auto, claw-sync rejects the config: fails, says so, commit marked failed (install itself recorded)" \
   eval '[ $rc = 1 ] && says "claw-sync rejected ${a6:0:7}" && failed "$a6" && [ "$(last)" = "$a6" ] && restarts 0'
 run --auto
 check "auto, same failed commit: fails again at once (check stays down), no clone" \
   eval '[ $rc = 1 ] && says "failed to install or check" && ! grep -q "\[clone\]" "$T/git.log"'
-rm "$T/oc/.cache/claw-sync/bad"
+rm "$T/oc/.cache/claw-sync/bad" "$T/sync_stuck"
 run -y
 check "a manual install that succeeds clears it" eval '[ $rc = 0 ] && [ ! -e "$T/state/failed" ]'
 run --auto
@@ -255,18 +263,26 @@ echo 6 > "$T/dev/infra/openclaw-plugins/p/index.js"; a8=$(push "smoke breaks")
 printf '#!/bin/bash\necho "FAIL fake-check"\nexit 1\n' > "$T/claw-smoke"
 run --auto
 check "auto, smoke test fails: fails, marked failed" eval '[ $rc = 1 ] && says "smoke test FAILED" && failed "$a8"'
-printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"
+smoke_passes
+echo more > "$T/dev/README.md"; a8b=$(push "docs after a late failure"); : > "$T/installed"
+run --auto
+check "auto, docs-only merge after a commit that failed past install.sh: installs, restarts and checks again in full" \
+  eval '[ $rc = 0 ] && grep -q " $a8b$" "$T/installed" && restarts 1 && says "smoke test passed" && [ ! -e "$T/state/failed" ]'
 touch "$T/install_fails"; echo 7 > "$T/dev/infra/openclaw-plugins/p/index.js"; a9=$(push "install fails")
 run --auto
-check "auto, install.sh fails: nothing recorded, marked failed, no restart" eval '[ $rc = 1 ] && [ "$(last)" = "$a8" ] && failed "$a9" && restarts 0'
+check "auto, install.sh fails: nothing recorded, marked failed, no restart" eval '[ $rc = 1 ] && [ "$(last)" = "$a8b" ] && failed "$a9" && restarts 0'
 rm "$T/install_fails"
 echo 8 > "$T/dev/infra/openclaw-plugins/p/index.js"; a10=$(push "fixed")
 run --auto
 check "auto, a new merge after a failure is tried" eval '[ $rc = 0 ] && [ "$(last)" = "$a10" ] && [ ! -e "$T/state/failed" ]'
+echo 81 > "$T/dev/infra/openclaw-plugins/p/index.js"; a10b=$(push "plugin, user bus down"); touch "$T/no_bus"
+run --auto
+check "auto, the gateway's user manager can't be reached for its pid: still installs" eval '[ $rc = 0 ] && [ "$(last)" = "$a10b" ]'
+rm "$T/no_bus"
 echo 9 > "$T/dev/infra/openclaw-plugins/p/index.js"; a11=$(push "while locked")
 flock "$T/state/lock" sleep 3 & sleep 0.5
 run --auto
-check "auto while another claw-install runs: exits quietly, nothing done" eval '[ $rc = 0 ] && [ ! -s "$T/git.log" ] && [ "$(last)" = "$a10" ]'
+check "auto while another claw-install runs: exits quietly, nothing done" eval '[ $rc = 0 ] && [ ! -s "$T/git.log" ] && [ "$(last)" = "$a10b" ]'
 wait
 mv "$T/origin.git" "$T/origin.away"
 run --auto
@@ -279,11 +295,20 @@ pin() { mkdir -p "$T/dev/infra/openclaw"; printf '{\n  "dependencies": {\n    "o
 echo 2026.1.0 > "$T/ocver"; : > "$T/update.log"
 pin 2026.1.1; echo 10 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "OpenClaw 2026.1.1 + plugin" >/dev/null
 run --auto
-check "pin differs from the host: openclaw update --tag as openclaw, claw-sync paused, counts as the restart" \
-  eval '[ $rc = 0 ] && grep -q "^update --tag 2026.1.1 --yes" "$T/update.log" && [ "$(cat "$T/ocver")" = 2026.1.1 ] && restarts 0 && [ "$(head -n1 "$T/systemctl.log" | grep -c "stop claw-sync.timer")" = 0 ] && grep -q "^stop claw-sync.timer$" "$T/systemctl.log" && [ "$(tail -n1 "$T/systemctl.log")" = "start claw-sync.timer" ] && says "updating OpenClaw 2026.1.0 -> 2026.1.1"'
+# claw-sync stays paused from before install.sh (before the install is recorded) until after the update
+sync_order() { [ "$(grep -E "^(stop|start) claw-sync.timer$|^install.sh$|^openclaw update$" "$T/systemctl.log" | tr '\n' ,)" = "stop claw-sync.timer,install.sh,openclaw update,start claw-sync.timer," ]; }
+check "pin differs from the host: openclaw update --tag as openclaw, claw-sync paused throughout, counts as the restart" \
+  eval '[ $rc = 0 ] && grep -q "^update --tag 2026.1.1 --yes" "$T/update.log" && [ "$(cat "$T/ocver")" = 2026.1.1 ] && restarts 0 && sync_order && says "updating OpenClaw 2026.1.0 -> 2026.1.1"'
 : > "$T/update.log"; echo 11 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin only" >/dev/null
 run --auto
 check "pin matches: no update, the plugin change restarts as usual" eval '[ $rc = 0 ] && [ ! -s "$T/update.log" ] && restarts 1'
+: > "$T/update.log"; pin 2026.1.3-1; echo '{"v":20}' > "$T/dev/openclaw.json"; push "OpenClaw hotfix + config" >/dev/null
+run --auto
+check "pin bump + config change: updated, then claw-sync (running again) deploys it, smoke passes" \
+  eval '[ $rc = 0 ] && grep -q "^update --tag 2026.1.3-1 --yes" "$T/update.log" && sync_order && says "claw-sync deployed" && says "smoke test passed"'
+: > "$T/update.log"; echo 12 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin, hotfix pin unchanged" >/dev/null
+run --auto
+check "a -N hotfix version that's installed matches: no update again" eval '[ $rc = 0 ] && [ ! -s "$T/update.log" ]'
 pin "^2026.1.2"; b1=$(push "a range, not a version")
 run --auto
 check "a range instead of an exact version: refused" eval '[ $rc = 1 ] && says "an exact OpenClaw version" && [ ! -s "$T/update.log" ] && failed "$b1"'
