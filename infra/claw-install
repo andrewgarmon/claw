@@ -126,19 +126,22 @@ wait_deployed() {
     bad=$(sync_state bad)
     [ "$bad" != "$sha" ] || die "claw-sync rejected ${sha:0:7}'s config and rolled back (its ping says why)"
     if [[ $bad =~ ^[0-9a-f]{40}$ ]] && ocgit merge-base --is-ancestor "$sha" "$bad"; then
+      ATTEMPT=$bad   # that's the commit that failed: --auto doesn't retry it
       die "claw-sync rejected ${bad:0:7}, merged after ${sha:0:7} (its ping says why); ${sha:0:7} itself installed"
     fi
     # claw-sync's origin/main is past <sha> with infra/ changes (checked once per commit it shows):
     # confirm on GitHub, as root, before giving up the wait
     main=$(ocgit rev-parse -q --verify refs/remotes/origin/main) || main=
     if [ -n "$main" ] && [ "$main" != "$sha" ] && [ "$main" != "$seen" ]; then
-      seen=$main
-      if ocgit merge-base --is-ancestor "$sha" "$main" && ! ocgit diff --quiet "$sha" "$main" -- infra/ \
-         && timeout 120 "${GIT[@]}" -C "$r" fetch -q origin main 2>/dev/null && main=$(git -C "$r" rev-parse FETCH_HEAD) \
-         && [ "$main" != "$sha" ] && git -C "$r" merge-base --is-ancestor "$sha" "$main" \
-         && ! git -C "$r" diff --quiet "$sha" "$main" -- infra/; then
-        echo "origin/main moved on to ${main:0:7}, which has infra/ changes of its own: claw-sync waits for that install"
-        MOVED_ON=1; return 0
+      if ! { ocgit merge-base --is-ancestor "$sha" "$main" && ! ocgit diff --quiet "$sha" "$main" -- infra/; }; then
+        seen=$main
+      elif timeout 120 "${GIT[@]}" -C "$r" fetch -q origin main 2>/dev/null; then   # else: retried next poll
+        seen=$main; main=$(git -C "$r" rev-parse FETCH_HEAD)
+        if [ "$main" != "$sha" ] && git -C "$r" merge-base --is-ancestor "$sha" "$main" \
+           && ! git -C "$r" diff --quiet "$sha" "$main" -- infra/; then
+          echo "origin/main moved on to ${main:0:7}, which has infra/ changes of its own: claw-sync waits for that install"
+          MOVED_ON=1; return 0
+        fi
       fi
     fi
     [ "$SECONDS" -lt "$end" ] || die "claw-sync hasn't deployed ${sha:0:7} in ${DEPLOY_WAIT}s"
@@ -162,8 +165,10 @@ gateway_changes() {
 # since, restart it here.
 reload_gateway() {
   wait_deployed "$1" "$2"
-  [ -z "$MOVED_ON" ] || return 0
-  if [ -n "$4" ] && [ "$(gw_pid || true)" = "$3" ]; then restart_gateway; fi
+  [ -z "$MOVED_ON" ] && [ -n "$4" ] || return 0
+  sync_pause   # first: a claw-sync deploy in progress may be restarting the gateway already
+  if [ "$(gw_pid || true)" = "$3" ]; then restart_gateway; fi
+  sync_resume
 }
 
 page() { if command -v less >/dev/null; then less -R; else cat; fi; }
@@ -285,9 +290,9 @@ main() {
   update_openclaw "$r"
   record "$sha"
   echo "installed ${sha:0:7}"
-  # a rejection from before this install (a manual re-run of a failed commit) would stop claw-sync
-  # trying it again: clear it, so claw-sync judges the config with everything installed
-  [ "$(sync_state bad)" != "$sha" ] || oc rm -f "$OC_HOME/.cache/claw-sync/bad"
+  # a manual re-run of a commit claw-sync rejected: clear the rejection, so claw-sync judges the
+  # config again with everything installed (--auto leaves it: claw-sync's verdict stands)
+  if [ "$AUTO" = 0 ] && [ "$(sync_state bad)" = "$sha" ]; then oc rm -f "$OC_HOME/.cache/claw-sync/bad"; fi
   sync_resume
   reload_gateway "$r" "$sha" "$pid" "$changed"
   if [ -n "$MOVED_ON" ]; then

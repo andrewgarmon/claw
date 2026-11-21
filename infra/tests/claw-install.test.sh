@@ -73,8 +73,9 @@ case "\$*" in
   "--user restart openclaw-gateway") echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid" ;;
   "show -p ActiveState --value claw-sync.service") echo inactive ;;
   "is-active -q claw-sync.timer") [ ! -e "$T/sync_stopped" ] ;;
-  "stop claw-sync.timer") touch "$T/sync_stopped"   # \$T/sync_running: a run in progress restarts the gateway
-    if [ -e "$T/sync_running" ]; then rm "$T/sync_running"; echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid"; fi ;;
+  "stop claw-sync.timer") touch "$T/sync_stopped"   # \$T/sync_running N: at the Nth stop, a run in progress restarts the gateway
+    if [ -e "$T/sync_running" ]; then n=\$((\$(cat "$T/sync_running") - 1)); echo \$n > "$T/sync_running"
+      [ \$n -gt 0 ] || { rm "$T/sync_running"; echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid"; }; fi ;;
   "enable --now claw-sync.timer") rm -f "$T/sync_stopped" ;;
   "start claw-sync.timer") rm -f "$T/sync_stopped" ;;
 esac
@@ -303,19 +304,25 @@ b2=$(git -C "$T/dev" rev-parse HEAD); : > "$T/installed"
 run --auto
 check "... the next run installs the new merge, with the restart and checks in full" \
   eval '[ $rc = 0 ] && [ "$(last)" = "$b2" ] && grep -q " $b2$" "$T/installed" && restarts 1 && says "smoke test passed" && [ ! -e "$T/state/redo" ]'
-echo 84 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin, while claw-sync restarts the gateway" >/dev/null; touch "$T/sync_running"
+echo 84 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin, while claw-sync restarts the gateway" >/dev/null; echo 1 > "$T/sync_running"
 run --auto
 check "auto, claw-sync was restarting the gateway (old plugin code) when the install began: still restarts after it" \
   eval '[ $rc = 0 ] && restarts 1'
+echo 86 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin; a later deploy restarts the gateway after this one's" >/dev/null; echo 2 > "$T/sync_running"
+run --auto
+check "auto, claw-sync restarts the gateway (deploying a later commit) just before claw-install would: no second restart" \
+  eval '[ $rc = 0 ] && restarts 0'
 echo 85 > "$T/dev/infra/openclaw-plugins/p/index.js"; c1=$(push "plugin")
 echo bad > "$T/dev/README.md"; git -C "$T/dev" commit -qam "config claw-sync rejects, merged during c1's install"; c2=$(git -C "$T/dev" rev-parse HEAD)
 touch "$T/merge_during" "$T/sync_rejects"
 run --auto
-check "auto, a later non-infra merge claw-sync rejects: fails at once, naming that commit" \
-  eval '[ $rc = 1 ] && says "claw-sync rejected ${c2:0:7}, merged after ${c1:0:7}"'
+check "auto, a later non-infra merge claw-sync rejects: fails at once, naming that commit, which is marked failed" \
+  eval '[ $rc = 1 ] && says "claw-sync rejected ${c2:0:7}, merged after ${c1:0:7}" && failed "$c2"'
 rm "$T/sync_rejects"
 run --auto
-check "... then installs that commit once it's main (a full install, after the failure)" eval '[ $rc = 0 ] && [ "$(last)" = "$c2" ] && says "smoke test passed"'
+check "... the auto-install doesn't retry it (claw-sync's rejection stands)" eval '[ $rc = 1 ] && [ -e "$T/oc/.cache/claw-sync/bad" ]'
+run -y
+check "... a manual install retries it in full" eval '[ $rc = 0 ] && [ "$(last)" = "$c2" ] && restarts 1 && says "smoke test passed"'
 echo 9 > "$T/dev/infra/openclaw-plugins/p/index.js"; a11=$(push "while locked")
 flock "$T/state/lock" sleep 3 & sleep 0.5
 run --auto
