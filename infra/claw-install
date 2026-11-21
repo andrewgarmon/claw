@@ -114,11 +114,34 @@ deploy() {
   return 1
 }
 
-install_at() {  # install_at <repo> <sha>: install.sh from that commit, then record it and update this bootstrap
+# openclaw itself, as the gateway's user, with its systemd --user session
+oc_cli() { (cd / && sudo -n -H -u openclaw env XDG_RUNTIME_DIR="/run/user/$(id -u openclaw)" \
+              PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" openclaw "$@"); }
+oc_version() { oc_cli --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?' | head -1; }
+
+# update_openclaw <repo>: put the host on the OpenClaw version infra/openclaw/package.json pins, through
+# OpenClaw's own updater (it stops, replaces and restarts the gateway, and recovers if the new one
+# doesn't come up). Before the install is recorded, so config that needs the new version can't deploy
+# first. Nothing pinned, or already that version: nothing to do.
+update_openclaw() {
+  local want have
+  want=$(sed -n 's/^ *"openclaw": *"\([^"]*\)".*/\1/p' "$1/infra/openclaw/package.json" 2>/dev/null | head -1) || true
+  [ -n "$want" ] || return 0
+  [[ $want =~ ^[0-9]{4}\.[0-9]{1,3}\.[0-9]{1,3}(-[0-9]+)?$ ]] || { echo "infra/openclaw/package.json: \"$want\" isn't an exact OpenClaw version" >&2; return 1; }
+  have=$(oc_version) || true
+  [ "$have" != "$want" ] || return 0
+  echo "updating OpenClaw ${have:-(unknown)} -> $want (openclaw update, as openclaw)"
+  oc_cli update --tag "$want" --yes --timeout 900 || { echo "openclaw update to $want failed (it keeps or restores the previous version)" >&2; return 1; }
+  have=$(oc_version) || true
+  [ "$have" = "$want" ] || { echo "openclaw update finished, but openclaw --version says ${have:-nothing}, not $want" >&2; return 1; }
+}
+
+install_at() {  # install_at <repo> <sha>: install.sh and the pinned OpenClaw from that commit, then record it and update this bootstrap
   git -C "$1" checkout -q "$2"
   echo "running infra/install.sh from ${2:0:7}"
   # the clone stays private (its dir is 700); installed files get the usual sudo umask
   (umask 022; CLAW_INSTALL_SHA=$2 bash "$1/infra/install.sh") || return 1
+  update_openclaw "$1" || return 1
   record "$2"
   # rename, so the running copy is never rewritten in place
   if ! cmp -s "$1/infra/claw-install" "$SELF"; then
@@ -197,7 +220,7 @@ main() {
   was=$(oc git -C "$OC_HOME/.openclaw" rev-parse -q --verify HEAD 2>/dev/null) || was=
   [[ $was =~ ^[0-9a-f]{40}$ ]] && [ "$was" != "$sha" ] && git -C "$r" merge-base --is-ancestor "$was" "$sha" 2>/dev/null || was=$last
 
-  install_at "$r" "$sha" || fail "$r" "$sha" "$last" "$was" "install.sh failed at ${sha:0:7}"
+  install_at "$r" "$sha" || fail "$r" "$sha" "$last" "$was" "installing ${sha:0:7} failed"
   echo "installed ${sha:0:7}"
   [ "$(sync_state bad)" != "$sha" ] || oc rm -f "$SYNC/bad"   # retrying a rolled-back commit
   if ! deploy "$sha"; then

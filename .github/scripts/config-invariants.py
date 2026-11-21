@@ -17,6 +17,8 @@ EQUAL = {
     "skills.workshop.autonomous.mode": "off",
     "skills.allowBundled": [],
     "agents.defaults.heartbeat.every": "0m",
+    "update.checkOnStart": False,   # the OpenClaw version comes from infra/openclaw/package.json
+    "update.auto.enabled": False,
     # cron jobs: timed reminders and agent turns only; no trigger scripts, script payloads or stream
     # schedules (command payloads need operator.admin, which the agent doesn't have)
     "cron.triggers.enabled": False,

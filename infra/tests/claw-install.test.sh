@@ -40,11 +40,12 @@ cat > "$BIN/git" <<EOF
 printf '[%s]' "\$@" >> "$T/git.log"; echo >> "$T/git.log"
 exec /usr/bin/git "\$@"
 EOF
-# fake sudo -u openclaw: runs the command here
-cat > "$BIN/sudo" <<'EOF'
+# fake sudo -u openclaw: runs the command here, keeping the fakes on PATH
+cat > "$BIN/sudo" <<EOF
 #!/bin/bash
-while [ "${1:0:1}" = - ]; do [ "$1" = -u ] && shift; shift; done
-exec "$@"
+while [ "\${1:0:1}" = - ]; do [ "\$1" = -u ] && shift; shift; done
+a=(); for x in "\$@"; do case \$x in PATH=*) a+=("PATH=$BIN:/usr/bin:/bin") ;; *) a+=("\$x") ;; esac; done
+exec "\${a[@]}"
 EOF
 # fake systemctl: logs each call. Starting claw-sync plays one claw-sync run: it fetches origin/main and
 # deploys it (or its good commit while main is marked bad), holds back a commit whose infra/ isn't
@@ -61,6 +62,16 @@ inst=\$(cat "$T/state/last" 2>/dev/null)
 [ -z "\$inst" ] || git -C \$g diff --quiet "\$inst" "\$want" -- infra/ || exit 0
 if [ -e "$T/sync_rejects" ] && [ "\$want" = "\$m" ]; then echo "\$m" > \$s/bad; exit 1; fi
 git -C \$g checkout -q "\$want"; echo "\$want" > \$s/good; echo "\$want" >> "$T/deploys"
+EOF
+# fake openclaw: --version from $T/ocver; update --tag V (logged) sets the version, fails with $T/update_fails
+cat > "$BIN/openclaw" <<EOF
+#!/bin/bash
+case "\$1" in
+  --version) [ -e "$T/ocver" ] && echo "OpenClaw \$(cat "$T/ocver") (abc1234)" ;;
+  update) echo "\$*" >> "$T/update.log"; echo "openclaw update" >> "$T/systemctl.log"; [ ! -e "$T/update_fails" ] || exit 1
+          echo "\$3" > "$T/ocver" ;;
+  *) exit 2 ;;
+esac
 EOF
 chmod +x "$BIN"/*
 
@@ -179,7 +190,7 @@ fi
 git -C "$T/dev" rev-parse HEAD > "$T/install_fails"
 run -y
 check "install.sh failure: the previous commit reinstalled and recorded, exit 1" \
-  eval '[ $rc = 1 ] && says "install.sh failed" && says "rolled back to ${sha2:0:7}" && [ "$(last)" = "$sha2" ] && installed_last "$sha2" && work_empty'
+  eval '[ $rc = 1 ] && says "failed" && says "rolled back to ${sha2:0:7}" && [ "$(last)" = "$sha2" ] && installed_last "$sha2" && work_empty'
 rm "$T/install_fails"
 
 touch "$T/not_root"
@@ -253,6 +264,37 @@ run -y
 check "first install (nothing recorded) that claw-sync can't deploy: fails, nothing to roll back to" \
   eval '[ $rc = 1 ] && says "didn" && ! says "rolling back"'
 rm "$T/sync_stuck"
+
+
+# ---------- the pinned OpenClaw version ----------
+pin() { mkdir -p "$T/dev/infra/openclaw"; printf '{\n  "dependencies": {\n    "openclaw": "%s"\n  }\n}\n' "$1" > "$T/dev/infra/openclaw/package.json"; }
+run -y; echo 2026.1.0 > "$T/ocver"; : > "$T/update.log"
+pin 2026.1.1; p1=$(push "OpenClaw 2026.1.1")
+run --auto
+# updated after install.sh, before the install is recorded (so before claw-sync deploys it)
+update_order() { [ "$(grep -E "^install.sh$|^openclaw update$|^start claw-sync.service$" "$T/systemctl.log" | head -n3 | tr '\n' ,)" = "install.sh,openclaw update,start claw-sync.service," ]; }
+check "pin differs from the host: openclaw update --tag as openclaw, before claw-sync deploys" \
+  eval '[ $rc = 0 ] && grep -q "^update --tag 2026.1.1 --yes" "$T/update.log" && [ "$(cat "$T/ocver")" = 2026.1.1 ] && update_order && deployed "$p1" && says "updating OpenClaw 2026.1.0 -> 2026.1.1"'
+: > "$T/update.log"; echo 21 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin only" >/dev/null
+run --auto
+check "pin matches: no update" eval '[ $rc = 0 ] && [ ! -s "$T/update.log" ]'
+pin 2026.1.3-1; push "OpenClaw hotfix" >/dev/null; run --auto
+: > "$T/update.log"; echo 22 > "$T/dev/infra/openclaw-plugins/p/index.js"; p2=$(push "plugin, hotfix pin unchanged")
+run --auto
+check "a -N hotfix version that's installed matches: no update again" eval '[ $rc = 0 ] && [ ! -s "$T/update.log" ] && [ "$(last)" = "$p2" ]'
+pin "^2026.1.2"; p3=$(push "a range, not a version")
+run --auto
+check "a range instead of an exact version: refused, rolled back" eval '[ $rc = 1 ] && says "an exact OpenClaw version" && [ ! -s "$T/update.log" ] && failed "$p3" && [ "$(last)" = "$p2" ]'
+pin 2026.1.2; touch "$T/update_fails"; p4=$(push "update fails")
+run --auto
+check "openclaw update fails: rolled back to the previous commit, marked failed" \
+  eval '[ $rc = 1 ] && says "openclaw update to 2026.1.2 failed" && failed "$p4" && [ "$(last)" = "$p2" ]'
+rm "$T/update_fails"
+pin 2026.1.4; p5=$(push "OpenClaw 2026.1.4, smoke breaks"); smoke_fails; : > "$T/update.log"
+run --auto
+check "smoke fails after an OpenClaw update: the rollback puts the previous version back" \
+  eval '[ $rc = 1 ] && grep -q "^update --tag 2026.1.4 " "$T/update.log" && grep -q "^update --tag 2026.1.3-1 " "$T/update.log" && [ "$(cat "$T/ocver")" = 2026.1.3-1 ] && [ "$(last)" = "$p2" ]'
+smoke_passes
 
 # ---------- install.sh's own guard ----------
 # copy the real install.sh into an other-writable dir; with id faking root it must refuse

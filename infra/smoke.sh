@@ -17,6 +17,7 @@ AGENT_GIT=/usr/local/bin/agent-git
 AGENT_CAL=/usr/local/bin/agent-cal
 CAL_SECRET=/home/calbot/.config/caldav.env
 OC_HOME=/home/openclaw
+OC_PIN=/usr/local/lib/claw/openclaw/package.json   # the OpenClaw version infra/openclaw pins
 OC_PLUGINS=/usr/local/lib/claw/openclaw-plugins   # root-owned plugins (install.sh, lib/openclaw-plugins.sh)
 GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected from ~/.openclaw/extensions (claw-sync has the same list)
 CONFIG_REPO=claw   # the repo claw-install deploys (see its REPO)
@@ -136,6 +137,18 @@ check_gateway() {
   PASS gateway
 }
 
+# 5b. The installed OpenClaw is the version infra/openclaw/package.json pins.
+check_version() {
+  local want have uid
+  want=$(sed -n 's/^ *"openclaw": *"\([^"]*\)".*/\1/p' "$OC_PIN" 2>/dev/null | head -1)
+  [ -n "$want" ] || { SKIP openclaw-version "no pinned version in $OC_PIN"; return; }
+  uid=$(id -u openclaw 2>/dev/null) || { FAIL openclaw-version "no openclaw user"; return; }
+  have=$(timeout "$WAIT" sudo -n -u openclaw env HOME="$OC_HOME" PATH="$OC_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin" \
+    XDG_RUNTIME_DIR="/run/user/$uid" openclaw --version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?' | head -1)
+  [ "$have" = "$want" ] || { FAIL openclaw-version "OpenClaw is ${have:-unknown} but infra/openclaw pins $want (re-run: sudo claw-install)"; return; }
+  PASS openclaw-version
+}
+
 # 6. Calendar broker, if it's installed and configured: one read-only CalDAV request.
 check_cal() {
   local rc
@@ -245,6 +258,7 @@ mkdir -p "$(dirname "$SMOKE_WINDOWS")" && echo "$smoke_start $((smoke_start + 2 
 check_git_refusals
 check_timers
 check_gateway
+check_version
 check_plugins
 check_tools
 check_cal

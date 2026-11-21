@@ -24,9 +24,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - name: Install the OpenClaw version the config was last written by
+      - name: Install the pinned OpenClaw version (infra/openclaw/package.json)
         run: |
-          v=$(jq -r '.meta.lastTouchedVersion // "latest"' openclaw.json)
+          v=$(jq -r '.dependencies.openclaw' infra/openclaw/package.json)
           echo "openclaw@$v"
           npm install -g --no-fund --no-audit "openclaw@$v"
       - name: Validate
