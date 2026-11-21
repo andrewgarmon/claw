@@ -27,6 +27,7 @@ case "\$*" in
     [ -e "$H/kill_on_restart" ] && [ "\$(wc -l < "$H/restarts")" -ge "\$(cat "$H/kill_on_restart" 2>/dev/null || echo 1)" ] && kill -9 \$PPID
     [ -e "$H/restart_rc" ] && exit 1
     exit 0 ;;
+  "--user daemon-reload") echo reload >> "$H/reloads" ;;
   "--user is-active -q openclaw-gateway") [ ! -e "$H/gw_down" ] && ! grep -q CRASH "$H/gw_cfg" ;;
   *) echo "unexpected systemctl \$*" >&2; exit 2 ;;
 esac
@@ -354,6 +355,14 @@ run; check "main whose .gitignore stops covering state: not synced, nothing remo
 cp "$REPO/.gitignore" "$T/dev/.gitignore"; git -C "$T/dev" add .gitignore && git -C "$T/dev" commit -qm "gitignore back" && git -C "$T/dev" push -q origin main
 run; check "ignore rules fixed: synced, the planted file removed, state kept" \
   eval '[ $rc = 1 ] && head_is "$(git -C "$T/dev" rev-parse HEAD)" && pinged /fail "untracked files removed: workspace/PLANTED.md" && [ -e "$O/workspace/memory/x.md" ] && [ -e "$O/.env" ]'
+
+# infra/ changes load only at start: a deploy across them restarts the gateway (after a daemon-reload)
+mkdir -p "$T/dev/infra/openclaw-plugins/p" "$T/dev/infra/tests"; : > "$H/reloads"
+ci1=$(commit "$(cat "$T/dev/openclaw.json")" infra/openclaw-plugins/p/index.js)
+run; check "infra/ change, same config: daemon-reload, then one restart" \
+  eval '[ $rc = 0 ] && head_is $ci1 && restarts 1 && [ -s "$H/reloads" ] && grep -q "infra/ changed: gateway restarted" "$T/out" && pinged "" "deployed ${ci1:0:7}"'
+ci2=$(commit "$(cat "$T/dev/openclaw.json")" infra/tests/x.test.sh)
+run; check "infra/tests change only: no restart" eval '[ $rc = 0 ] && head_is $ci2 && restarts 0'
 
 # Infra installed vs merged: a commit with infra/ changes past the installed one isn't deployed (its
 # config may need plugin code that isn't installed); claw-sync stays put, healthy, writes infra-pending
