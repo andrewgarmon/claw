@@ -340,7 +340,7 @@ echo 2026.1.0 > "$T/ocver"; : > "$T/update.log"
 pin 2026.1.1; echo 10 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "OpenClaw 2026.1.1 + plugin" >/dev/null
 run --auto
 # claw-sync stays paused from before install.sh (before the install is recorded) until after the update
-sync_order() { [ "$(grep -E "^(stop|start) claw-sync.timer$|^install.sh$|^openclaw update$" "$T/systemctl.log" | tr '\n' ,)" = "stop claw-sync.timer,install.sh,openclaw update,start claw-sync.timer," ]; }
+sync_order() { [ "$(grep -E "^(stop|start) claw-sync.timer$|^install.sh$|^openclaw update$" "$T/systemctl.log" | head -n4 | tr '\n' ,)" = "stop claw-sync.timer,install.sh,openclaw update,start claw-sync.timer," ]; }
 check "pin differs from the host: openclaw update --tag as openclaw, claw-sync paused throughout, counts as the restart" \
   eval '[ $rc = 0 ] && grep -q "^update --tag 2026.1.1 --yes" "$T/update.log" && [ "$(cat "$T/ocver")" = 2026.1.1 ] && restarts 0 && sync_order && says "updating OpenClaw 2026.1.0 -> 2026.1.1"'
 : > "$T/update.log"; echo 11 > "$T/dev/infra/openclaw-plugins/p/index.js"; push "plugin only" >/dev/null
