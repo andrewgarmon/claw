@@ -212,7 +212,7 @@ PY
 }
 
 # 8. Tools: the deployed openclaw.json keeps the main agent off the shell (group:runtime and the
-#    gateway tool denied, file tools limited to the workspace, no cron or skill_workshop) and allows
+#    gateway tool denied, file tools limited to the workspace, no skill_workshop) and allows
 #    every tool the installed claw-tools plugin declares (globally or for one agent). Reads config and manifest only.
 check_tools() {
   local bad
@@ -230,7 +230,7 @@ except Exception:
     print("unreadable openclaw.json or claw-tools manifest"); sys.exit()
 out = []
 deny = set(tools.get("deny") or [])
-missing = [d for d in ("group:runtime", "gateway", "cron", "skill_workshop") if d not in deny]
+missing = [d for d in ("group:runtime", "gateway", "skill_workshop") if d not in deny]
 if missing: out.append("not denied: " + ", ".join(missing))
 if (tools.get("fs") or {}).get("workspaceOnly") is not True: out.append("tools.fs.workspaceOnly isn't true")
 allowed = set(tools.get("alsoAllow") or []) | set(tools.get("allow") or [])

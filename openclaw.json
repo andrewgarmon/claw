@@ -324,6 +324,11 @@
       "mode": "off"
     }
   },
+  "cron": {
+    "triggers": {
+      "enabled": false
+    }
+  },
   "tools": {
     "profile": "coding",
     "alsoAllow": [
@@ -358,7 +363,6 @@
       "plugins",
       "secrets",
       "skill_workshop",
-      "cron",
       "group:runtime",
       "gateway",
       "conversations_list",
