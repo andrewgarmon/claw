@@ -41,6 +41,29 @@ jobs:
           # "plugin not installed" warnings are expected here (plugins live on the droplet); only errors fail
           openclaw config validate
 
+  invariants:
+    name: openclaw.json keeps its security settings
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # reads the base branch's copy of the script
+      - name: Check
+        # On PRs run the base branch's copy, so a PR can't loosen a setting and the check that guards
+        # it at once (change the script, merge, then change the config). If the base has no copy yet
+        # (the PR adding it), the PR's own copy runs. Pushes to main run what's on main.
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          S=.github/scripts/config-invariants.py
+          if [ "$EVENT" = pull_request ]; then
+            if git show "$PR_BASE:$S" > "$RUNNER_TEMP/ci.py" 2>/dev/null; then S=$RUNNER_TEMP/ci.py
+            else echo "::notice::$S isn't on the base branch yet (the PR adding it): running this PR's copy"; fi
+          fi
+          python3 -I "$S" openclaw.json
+
   secrets:
     name: no secrets committed
     runs-on: ubuntu-latest
