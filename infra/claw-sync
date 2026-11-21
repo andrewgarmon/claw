@@ -166,8 +166,11 @@ sub_untracked() {
     if [ "${1:-}" = -z ]; then printf '%s\0' "$SUB/$f"; else printf '%s\n' "$SUB/$f"; fi
   done
 }
-# sub_init: the submodule is checked out (never run git -C $SUB otherwise: it would act on ~/.openclaw)
-sub_init() { [ -e "$SUB/.git" ]; }
+# sub_init: the submodule is checked out, and git run there works on it (never run git -C $SUB
+# otherwise: it would act on ~/.openclaw). Its config is agent-writable, and a core.worktree there
+# pointing at ~/.openclaw would make the removal loop list (and remove) files outside the submodule.
+# (git submodule update below also resets core.worktree; this doesn't rely on that.)
+sub_init() { [ -e "$SUB/.git" ] && [ "$(git -C "$SUB" rev-parse --show-toplevel 2>/dev/null)" = "$(pwd -P)/$SUB" ]; }
 # sub_checkout: make the submodule match HEAD's gitlink exactly. The URL comes from the committed
 # .gitmodules (sync), never from .git/config, which the agent's user can write; --checkout overrides
 # any submodule.*.update command set there. Flags are cleared and drift reset; untracked files are
