@@ -21,25 +21,43 @@ CLAW_ROOT=${CLAW_ROOT:-}
 as_user() { local u=$1; shift; (cd / && sudo -n -u "$u" -- "$@"); }
 
 # coder_home_install: coder's config dirs and caches (created as coder); its CLAUDE.md, installed
-# root-owned as Claude Code's managed memory file, and the managed settings that turn hooks and MCP
-# servers off for every session (coder can read them, not change them). Plus, as coder, the files in
-# ~/.claude that coder-acp-sandbox binds read-only (a session doesn't start without them): empty if
-# missing, and the old CLAUDE.md copy emptied.
+# root-owned as Claude Code's managed memory file, and the managed settings that turn hooks, MCP
+# servers, plugin marketplaces and auto-memory off for every session (coder can read them, not change
+# them). Plus, as coder, the paths in ~/.claude that coder-acp-sandbox binds read-only (a session
+# doesn't start without them): a symlink or the wrong type there is removed (a session could replace a
+# symlink: systemd binds its target), then empty ones created where missing, and the old CLAUDE.md
+# copy emptied. Claude Code's state file moves into ~/.claude (CLAUDE_CONFIG_DIR, coder-acp-run):
+# ~/.claude.json is copied there once.
 coder_home_install() {
   local R=$CLAW_ROOT C=$CLAW_ROOT/home/coder/.claude f
   as_user coder install -d -m 700 "$R/home/coder/.config" "$C" "$R/home/coder/.cache" "$R/home/coder/.npm" \
-    "$C/commands" "$C/agents" "$C/skills" "$C/output-styles" \
-    || { echo "install.sh: couldn't create ~coder/.config and ~coder/.claude as coder" >&2; return 1; }
+    || { echo "install.sh: couldn't create ~coder/.config, .claude, .cache or .npm as coder" >&2; return 1; }
   install -d -m 755 -o root -g root "$R/etc/claude-code"
   install -m 644 -o root -g root coder-CLAUDE.md "$R/etc/claude-code/CLAUDE.md"
   install -m 644 -o root -g root coder-managed-settings.json "$R/etc/claude-code/managed-settings.json"
-  for f in "$C/settings.json" "$C/settings.local.json" "$R/home/coder/.claude.json"; do
-    as_user coder test -e "$f" || printf '{}\n' | as_user coder install -m 600 /dev/stdin "$f" \
-      || { echo "install.sh: couldn't create $f as coder" >&2; return 1; }
+  for f in settings.json settings.local.json CLAUDE.md rules commands agents skills output-styles plugins; do
+    coder_protected "$C/$f" || { echo "install.sh: couldn't set up ~coder/.claude/$f as coder" >&2; return 1; }
   done
-  # the copy older installs put in coder's home: emptied, not removed (the sandbox binds it)
-  as_user coder install -m 600 /dev/null "$C/CLAUDE.md" \
-    || { echo "install.sh: couldn't empty ~coder/.claude/CLAUDE.md as coder" >&2; return 1; }
+  if ! as_user coder test -e "$C/.claude.json" && as_user coder test -f "$R/home/coder/.claude.json" \
+     && ! as_user coder test -L "$R/home/coder/.claude.json"; then
+    as_user coder cp "$R/home/coder/.claude.json" "$C/.claude.json" \
+      || echo "install.sh: couldn't copy ~coder/.claude.json into ~coder/.claude as coder" >&2
+  fi
+}
+
+# coder_protected <path>: as coder, make <path> a real file (*.json, CLAUDE.md) or directory, not a
+# symlink. Existing contents are kept, except CLAUDE.md: the copy older installs put there, emptied.
+coder_protected() {
+  local p=$1 t=-d
+  case $p in *.json|*.md) t=-f ;; esac
+  if as_user coder test -L "$p" || { as_user coder test -e "$p" && ! as_user coder test "$t" "$p"; }; then
+    as_user coder rm -rf "$p" || return 1
+  fi
+  case $p in
+    */CLAUDE.md) as_user coder install -m 600 /dev/null "$p" ;;
+    *.json) as_user coder test -e "$p" || printf '{}\n' | as_user coder install -m 600 /dev/stdin "$p" ;;
+    *) as_user coder install -d -m 700 "$p" ;;
+  esac
 }
 
 # gateway_dropins_install: the gateway's systemd drop-ins (gateway-dropins/*.conf), root-owned in

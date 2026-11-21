@@ -80,7 +80,7 @@ install -m 644 -o root -g root claw-install-auto.service claw-install-auto.timer
 # --- Claude Code as coder (ACP target)
 id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
 install -d -m 755 -o coder -g coder /srv/work
-install -m 755 -o root -g root coder-acp claude-usage /usr/local/bin/
+install -m 755 -o root -g root claude-usage /usr/local/bin/
 install -m 644 -o root -g root claude-usage.mjs /usr/local/lib/claw/
 # the sandbox coder-acp hands over to (root, through coder.sudoers), what it runs, and its self-check
 install -m 755 -o root -g root coder-acp-sandbox /usr/local/sbin/
@@ -111,6 +111,9 @@ oc_plugins_install openclaw-plugins
 visudo -cf coder.sudoers
 install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
 coder_home_install   # ~coder dirs and sandbox files (as coder), /etc/claude-code/{CLAUDE.md,managed-settings.json}
+# coder-acp last: it only hands over to the sandbox, which needs the sudo rule and those files, so an
+# install that stops before here leaves the previous coder-acp in place
+install -m 755 -o root -g root coder-acp /usr/local/bin/
 # coder's commit identity: agent-git checks author/committer against redact.txt for public repos
 sudo -H -u coder git -C /home/coder config --global user.name 'Claude Code'  # -C: coder can't stat root's cwd
 sudo -H -u coder git -C /home/coder config --global user.email claude@claw.invalid

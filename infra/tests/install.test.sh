@@ -60,18 +60,26 @@ snapshot() { (cd "$TGT" && stat -c '%a %u %g %n' . ./* && sha256sum ./*); }
 fresh
 mkdir -p "$R/home/coder/.claude" "$R$OLD" "$R$DD"
 echo old > "$R/home/coder/.claude/CLAUDE.md"; echo mine > "$R/home/coder/.claude/settings.local.json"
+echo '{"state":1}' > "$R/home/coder/.claude.json"; mkdir "$R/home/coder/.claude/skills"; echo s > "$R/home/coder/.claude/skills/x"
+ln -s "$R/home/coder/.config" "$R/home/coder/.claude/agents"; echo f > "$R/home/coder/.claude/rules"   # left by a session
 for f in gateway-dropins/*.conf; do echo old > "$R$OLD/${f##*/}"; done
 echo mine > "$R$OLD/mine.conf"; echo gone > "$R$DD/renamed.conf"
 run
 check "upgrade: no errors or warnings" eval '[ $rc = 0 ] && [ ! -s "$T/out" ]'
-check "coder's dirs created as coder, mode 700 (with the ones the sandbox binds)" \
-  eval 'called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.config][$R/home/coder/.claude][$R/home/coder/.cache][$R/home/coder/.npm][$R/home/coder/.claude/commands][$R/home/coder/.claude/agents][$R/home/coder/.claude/skills][$R/home/coder/.claude/output-styles]" && [ "$(stat -c %a "$R/home/coder/.config" "$R/home/coder/.claude/skills")" = "$(printf "700\n700")" ]'
+check "coder's dirs created as coder, mode 700" \
+  eval 'called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.config][$R/home/coder/.claude][$R/home/coder/.cache][$R/home/coder/.npm]" && [ "$(stat -c %a "$R/home/coder/.config")" = 700 ]'
+check "the dirs the sandbox binds: created as coder, mode 700, contents kept" \
+  eval 'for d in rules commands agents skills output-styles plugins; do called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.claude/$d]" && [ -d "$R/home/coder/.claude/$d" ] && [ ! -L "$R/home/coder/.claude/$d" ] || exit 1; done && [ "$(cat "$R/home/coder/.claude/skills/x")" = s ]'
+check "a symlink or a file where the sandbox binds a dir: removed as coder, a dir made" \
+  eval 'called "sudo[-n][-u][coder][--][rm][-rf][$R/home/coder/.claude/agents]" && called "sudo[-n][-u][coder][--][rm][-rf][$R/home/coder/.claude/rules]" && [ -d "$R/home/coder/.config" ]'
 check "CLAUDE.md installed root:root 644 as Claude Code's managed memory, /etc/claude-code/CLAUDE.md" \
   eval 'called "install[-m][644][-o][root][-g][root][coder-CLAUDE.md][$R/etc/claude-code/CLAUDE.md]" && cmp -s coder-CLAUDE.md "$R/etc/claude-code/CLAUDE.md" && called "install[-d][-m][755][-o][root][-g][root][$R/etc/claude-code]"'
-check "managed settings installed root:root 644: hooks and MCP servers off" \
-  eval 'called "install[-m][644][-o][root][-g][root][coder-managed-settings.json][$R/etc/claude-code/managed-settings.json]" && python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"allowManagedHooksOnly\"] is True and d[\"allowedMcpServers\"] == [] else 1)" "$R/etc/claude-code/managed-settings.json"'
+check "managed settings installed root:root 644: hooks, MCP servers, marketplaces and auto-memory off" \
+  eval 'called "install[-m][644][-o][root][-g][root][coder-managed-settings.json][$R/etc/claude-code/managed-settings.json]" && python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"allowManagedHooksOnly\"] is True and d[\"allowedMcpServers\"] == [] and d[\"disableAllHooks\"] is True and d[\"autoMemoryEnabled\"] is False and d[\"strictKnownMarketplaces\"] == [] else 1)" "$R/etc/claude-code/managed-settings.json"'
 check "settings files the sandbox binds: created as coder with {} when missing, kept when there" \
-  eval '[ "$(cat "$R/home/coder/.claude/settings.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude/settings.local.json")" = mine ]'
+  eval '[ "$(cat "$R/home/coder/.claude/settings.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude/settings.local.json")" = mine ]'
+check "coder's .claude.json copied into its .claude as coder (Claude Code's state file moves there)" \
+  eval 'called "sudo[-n][-u][coder][--][cp][$R/home/coder/.claude.json][$R/home/coder/.claude/.claude.json]" && [ "$(cat "$R/home/coder/.claude/.claude.json")" = "{\"state\":1}" ]'
 check "the old CLAUDE.md in coder's home is emptied, as coder" \
   eval 'called "sudo[-n][-u][coder][--][install][-m][600][/dev/null][$R/home/coder/.claude/CLAUDE.md]" && [ -f "$R/home/coder/.claude/CLAUDE.md" ] && [ ! -s "$R/home/coder/.claude/CLAUDE.md" ]'
 check "drop-ins installed root:root 644 in /etc/systemd/user/openclaw-gateway.service.d/" \
@@ -97,7 +105,8 @@ check "fresh host: installs cleanly" eval '[ $rc = 0 ] && [ ! -s "$T/out" ] && [
 # The target stands for a root-owned directory: owner, mode and contents must not change.
 for p in "$OLD" "$OLD/heap.conf" /home/openclaw/.config/systemd/user /home/openclaw/.config \
          /home/coder/.claude /home/coder/.claude/CLAUDE.md /home/coder/.config \
-         /home/coder/.claude/settings.json /home/coder/.claude.json /home/coder/.claude/skills; do
+         /home/coder/.claude/settings.json /home/coder/.claude.json /home/coder/.claude/.claude.json \
+         /home/coder/.claude/skills; do
   fresh
   case $p in
     */heap.conf) mkdir -p "$R${p%/*}"; ln -s "$TGT/heap.conf" "$R$p" ;;
@@ -113,7 +122,7 @@ done
 fresh; ln -s "$TGT" "$R/home/coder/.claude"
 run
 check "a home dir coder can't create: the coder step fails and says so" \
-  eval '[ $r1 = 1 ] && says "couldn'"'"'t create ~coder/.config and ~coder/.claude as coder"'
+  eval '[ $r1 = 1 ] && says "couldn'"'"'t create ~coder/.config, .claude, .cache or .npm as coder"'
 # the harness catches the old behaviour: root's install -d through the same symlink changes the target
 before=$(snapshot); install -d -m 700 "$R/home/coder/.claude"
 check "harness check: a root write through the symlink is detected" eval '[ "$(snapshot)" != "$before" ]'

@@ -1,4 +1,7 @@
 {
   "allowManagedHooksOnly": true,
-  "allowedMcpServers": []
+  "disableAllHooks": true,
+  "allowedMcpServers": [],
+  "strictKnownMarketplaces": [],
+  "autoMemoryEnabled": false
 }

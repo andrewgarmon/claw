@@ -8,6 +8,7 @@
 # Exit codes: 0 JSON; 3 plan limits unavailable (not logged in / no profile scope); 1 other errors.
 set -euo pipefail
 export HOME=/home/coder
+export CLAUDE_CONFIG_DIR=$HOME/.claude   # .claude.json in there too, as in coder-acp-run
 export PATH=/usr/local/bin:/usr/bin:/bin
 SCRIPT=/usr/local/lib/claw/claude-usage.mjs
 CACHE=$HOME/.cache/claude-usage.json

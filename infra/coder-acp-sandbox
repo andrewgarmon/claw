@@ -6,17 +6,22 @@
 #
 # Inside, the filesystem is read-only except:
 #   /srv/work                          the repos
-#   ~/.claude, ~/.claude.json          Claude Code's session data, login and state
+#   ~/.claude                          Claude Code's session data, login and state (coder-acp-run puts
+#                                      .claude.json in there too)
 #   ~/.cache, ~/.npm                   caches (if they exist)
 #   /home/gitbot, /run/sudo, ...       for agent-git, which coder runs through sudo (so it runs in
 #                                      here too, and there's no NoNewPrivileges); unix permissions
 #                                      still keep coder out of them
 # and /tmp is private. On top, everything in ~/.claude that would carry code or instructions into
 # later sessions is bound read-only (PROTECTED): settings (statusLine, apiKeyHelper, ... run commands),
-# CLAUDE.md, commands, agents, skills, output styles. They must exist (install.sh creates them as
-# coder), or the session doesn't start. A bind mount can't be renamed or removed from inside, so a
-# session can't swap them out. Hooks and MCP servers, from any settings or repo, are off by policy
-# (/etc/claude-code/managed-settings.json). The network stays open: GitHub, Anthropic and npm are needed.
+# CLAUDE.md, rules, commands, agents, skills, output styles, plugins. They must exist and not be
+# symlinks (install.sh makes sure, as coder), or the session doesn't start: a bind mount can't be
+# renamed or removed from inside, so a session can't swap them out. Hooks, MCP servers, plugin
+# marketplaces and auto-memory are off by policy (/etc/claude-code/managed-settings.json). The network
+# stays open: GitHub, Anthropic and npm are needed.
+#
+# The sandbox is a transient unit of its own, so a signal to this script (acpx cancelling a session,
+# the gateway stopping, claw-smoke's timeout) stops the unit, not just systemd-run.
 #
 # --check (root, from claw-smoke): run coder-sandbox-probe in the same sandbox instead; it reports
 # whether each of those paths is writable as it should be.
@@ -27,10 +32,11 @@ WORK=/srv/work
 RUN=/usr/local/lib/claw/coder-acp-run
 PROBE=/usr/local/lib/claw/coder-sandbox-probe
 # "-": skipped if missing (and stays read-only)
-WRITABLE=("$WORK" "$H/.claude" "$H/.claude.json" "-$H/.cache" "-$H/.npm"
+WRITABLE=("$WORK" "$H/.claude" "-$H/.cache" "-$H/.npm"
           /home/gitbot -/run/sudo -/var/lib/sudo)
 PROTECTED=("$H/.claude/settings.json" "$H/.claude/settings.local.json" "$H/.claude/CLAUDE.md"
-           "$H/.claude/commands" "$H/.claude/agents" "$H/.claude/skills" "$H/.claude/output-styles")
+           "$H/.claude/rules" "$H/.claude/commands" "$H/.claude/agents" "$H/.claude/skills"
+           "$H/.claude/output-styles" "$H/.claude/plugins")
 
 cmd=$RUN
 case "${1:-}" in
@@ -41,6 +47,12 @@ esac
 [ "$(id -u)" = 0 ] || { echo "coder-acp-sandbox: run it through sudo" >&2; exit 1; }
 dir=$(pwd -P 2>/dev/null) || dir=$WORK
 case "$dir" in "$WORK"|"$WORK"/*) ;; *) dir=$WORK ;; esac
+# systemd binds a symlink's target; the link itself could then be replaced from inside
+for p in "${PROTECTED[@]}"; do
+  if [ -L "$p" ] || [ ! -e "$p" ]; then
+    echo "coder-acp-sandbox: $p is missing or a symlink; run: sudo claw-install" >&2; exit 1
+  fi
+done
 
 # Mount-based options only: the seccomp-based ones (PrivateDevices, RestrictSUIDSGID, LockPersonality,
 # ProtectClock, ...) imply NoNewPrivileges for a service with User=, and agent-git needs sudo.
@@ -49,4 +61,8 @@ props=(-p User=coder -p Group=coder -p "WorkingDirectory=$dir"
        -p ProtectKernelTunables=yes -p ProtectControlGroups=yes)
 for p in "${WRITABLE[@]}"; do props+=(-p "ReadWritePaths=$p"); done
 for p in "${PROTECTED[@]}"; do props+=(-p "ReadOnlyPaths=$p"); done
-exec systemd-run --quiet --pipe --wait --collect --service-type=exec "${props[@]}" "$cmd"
+unit=coder-acp-$$
+trap 'systemctl stop "$unit.service" 2>/dev/null; exit 143' TERM INT HUP
+# <&0: a background job's stdin would otherwise be /dev/null, and stdin is the ACP stream
+systemd-run --quiet --pipe --wait --collect --service-type=exec --unit="$unit" "${props[@]}" "$cmd" <&0 &
+wait $!

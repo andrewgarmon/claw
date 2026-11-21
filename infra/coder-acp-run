@@ -6,6 +6,10 @@
 set -euo pipefail
 export HOME=/home/coder
 export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Claude Code's state file in ~/.claude (default ~/.claude.json, beside a lock and temp files it can't
+# create in the read-only home); its settings, memory and login are in ~/.claude either way
+export CLAUDE_CONFIG_DIR=$HOME/.claude
+export CLAUDE_CODE_DISABLE_AUTO_MEMORY=1   # also off by managed settings: no notes passed between sessions
 export GH_NO_UPDATE_NOTIFIER=1   # gh can't write its state file: home is read-only in here
 ACP=/usr/local/lib/claw/acp/node_modules/.bin/claude-agent-acp
 [ -x "$ACP" ] || { echo "coder-acp: ACP adapter not installed at $ACP; run: sudo claw-install" >&2; exit 1; }

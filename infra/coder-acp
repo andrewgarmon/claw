@@ -2,8 +2,9 @@
 # Start Claude Code's ACP adapter as coder, in its sandbox. OpenClaw's acpx runs:
 #   sudo -n -u coder /usr/local/bin/coder-acp
 # This hands straight over to coder-acp-sandbox (root, through coder's own sudo rule: no arguments,
-# environment reset), which runs coder-acp-run as coder again inside a systemd sandbox. So nothing
-# openclaw may run as coder runs Claude Code outside it.
+# environment reset), which runs coder-acp-run as coder again inside a systemd sandbox. The only other
+# thing openclaw may run as coder is claude-usage: it starts Claude Code outside the sandbox, but with
+# no settings sources and no prompt, only to read the plan's usage.
 set -euo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin
 exec sudo -n /usr/local/sbin/coder-acp-sandbox
