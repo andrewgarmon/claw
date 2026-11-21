@@ -109,11 +109,12 @@ oc_plugins_install openclaw-plugins
 
 visudo -cf coder.sudoers
 install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
-coder_home_install   # ~coder dirs and sandbox files (as coder), /etc/claude-code/{CLAUDE.md,managed-settings.json}
+coder_home_install   # ~coder dirs and sandbox paths (as coder), /etc/claude-code/{CLAUDE.md,managed-settings.json}
 # coder-acp and claude-usage last: coder-acp only hands over to the sandbox, which needs the sudo rule
 # and those files, and claude-usage reads ~/.claude/.claude.json, copied there just now. An install
 # that stops before here leaves the previous ones in place.
 install -m 755 -o root -g root coder-acp claude-usage /usr/local/bin/
+coder_sandbox_migrate   # once: stop coder's unsandboxed processes, move ~/.claude's protected paths aside
 # coder's commit identity: agent-git checks author/committer against redact.txt for public repos
 sudo -H -u coder git -C /home/coder config --global user.name 'Claude Code'  # -C: coder can't stat root's cwd
 sudo -H -u coder git -C /home/coder config --global user.email claude@claw.invalid

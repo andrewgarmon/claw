@@ -30,6 +30,7 @@ done
 want read-only "$H"
 want read-only "$H/.claude.json"
 want read-only /etc
+if [ -e /run/user ] && ls /run/user >/dev/null 2>&1; then echo "BAD  /run/user is reachable"; bad=1; else echo "ok   /run/user is out of reach"; fi
 want read-only /usr/local/bin
 # its own PID namespace: no other process's /proc/<pid>/root (the host's view) in reach
 if [ "$(cat /proc/1/comm 2>/dev/null)" != systemd ] && [ "$(ls -d /proc/[0-9]* | wc -l)" -lt 50 ]; then

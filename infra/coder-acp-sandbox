@@ -64,12 +64,16 @@ done
 # No NoNewPrivileges, and nothing that sets it (agent-git needs sudo).
 props=(-p "WorkingDirectory=$dir" -E "HOME=$H" -E USER=coder -E LOGNAME=coder
        -p ProtectSystem=strict -p ProtectHome=read-only -p PrivateTmp=yes
-       -p ProtectKernelTunables=yes -p ProtectControlGroups=yes)
+       -p ProtectControlGroups=yes -p InaccessiblePaths=-/run/user)
+# (no ProtectKernelTunables: unshare --mount-proc's fresh /proc would hide it. /run/user: coder's
+# user manager, if it ever has one, would start units outside the sandbox.)
 for p in "${WRITABLE[@]}"; do props+=(-p "ReadWritePaths=$p"); done
 for p in "${PROTECTED[@]}"; do props+=(-p "ReadOnlyPaths=$p"); done
-unit=coder-acp-$$-$RANDOM
+unit=coder-acp-$$-$RANDOM run=
 stop() {
-  kill "$run" 2>/dev/null || true; systemctl stop "$unit.service" 2>/dev/null || true; wait "$run" 2>/dev/null || true
+  [ -z "$run" ] || kill "$run" 2>/dev/null || true
+  systemctl stop "$unit.service" 2>/dev/null || true
+  [ -z "$run" ] || wait "$run" 2>/dev/null || true
   exit "$1"
 }
 trap 'stop 143' TERM; trap 'stop 130' INT; trap 'stop 129' HUP

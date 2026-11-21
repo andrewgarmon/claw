@@ -96,7 +96,7 @@ check "coder-acp hands over to the sandbox: sudo -n, no arguments" eval '[ "$(ca
 # they agree with each other
 probe=$(sed -n 's/^for p in \(settings.json.*\); do$/\1/p' "$INFRA/coder-sandbox-probe" | tr ' ' '\n' | sed 's|^|/home/coder/.claude/|')
 check "the probe checks every read-only path" eval '[ "$(list PROTECTED | sort)" = "$(sort <<< "$probe")" ]'
-made=$(sed -n 's/.* P=(\(settings.json[^)]*\))$/\1/p' "$INFRA/lib/service-home.sh" | tr ' ' '\n' | sed 's|^|/home/coder/.claude/|')
+made=$(sed -n 's/^CODER_PROTECTED=(\(.*\))$/\1/p' "$INFRA/lib/service-home.sh" | tr ' ' '\n' | sed 's|^|/home/coder/.claude/|')
 for p in $(list PROTECTED); do
   check "install.sh creates ${p#/home/coder/} (the sandbox won't start without it)" grep -qxF -- "$p" <<< "$made"
 done

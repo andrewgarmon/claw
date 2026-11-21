@@ -33,13 +33,18 @@ for a in "${@:2}"; do
   case $p in '"$R"'/home/"$u"|'"$R"'/home/"$u"/*) ;; *) echo "sudo: $u: permission denied: $a" >&2; exit 1 ;; esac
 done
 PATH=/usr/bin:/bin exec "$@"'
+# pkill/pgrep: logged; no coder processes here
+fake pkill "$LOGCALL"'
+true'
+fake pgrep "$LOGCALL"'
+exit 1'
 PATH=$BIN:$PATH
 cd "$INFRA" || exit 1   # the steps take repo files relative to infra/, as install.sh does
 
 DD=/etc/systemd/user/openclaw-gateway.service.d                     # drop-ins now
 OLD=/home/openclaw/.config/systemd/user/openclaw-gateway.service.d  # drop-ins before
 fails=0
-run() { : > "$T/calls"; { coder_home_install; r1=$?; gateway_dropins_install; rc=$((r1 + $?)); } > "$T/out" 2>&1; }
+run() { : > "$T/calls"; { coder_home_install && coder_sandbox_migrate; r1=$?; gateway_dropins_install; rc=$((r1 + $?)); } > "$T/out" 2>&1; }
 check() {
   local name=$1; shift
   if "$@"; then echo "ok   $name"; else echo "FAIL $name"; sed 's/^/     out:   /' "$T/out"; sed 's/^/     calls: /' "$T/calls"; fails=$((fails + 1)); fi
@@ -65,12 +70,14 @@ ln -s "$R/home/coder/.config" "$R/home/coder/.claude/agents"; echo f > "$R/home/
 for f in gateway-dropins/*.conf; do echo old > "$R$OLD/${f##*/}"; done
 echo mine > "$R$OLD/mine.conf"; echo gone > "$R$DD/renamed.conf"
 run
-check "upgrade: no errors or warnings" eval '[ $rc = 0 ] && [ ! -s "$T/out" ]'
+B=$(ls -d "$R"/home/coder/.claude/pre-sandbox-* 2>/dev/null)
+check "upgrade: no errors or warnings, says where the old paths went" eval '[ $rc = 0 ] && [ "$(cat "$T/out")" = "install.sh: moved coder'"'"'s ~/.claude/{settings.local.json CLAUDE.md skills} to ${B#"$R"}/ (sessions could write them until now)" ]'
 check "coder's dirs created as coder, mode 700" \
   eval 'called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.config][$R/home/coder/.claude][$R/home/coder/.cache][$R/home/coder/.npm]" && [ "$(stat -c %a "$R/home/coder/.config")" = 700 ]'
-B=$(ls -d "$R"/home/coder/.claude/pre-sandbox-* 2>/dev/null)
 check "first install with the sandbox: what sessions could write is moved aside, as coder" \
-  eval '[ -n "$B" ] && [ "$(cat "$B/settings.local.json")" = mine ] && [ "$(cat "$B/skills/x")" = s ] && [ -L "$B/agents" ] && [ "$(cat "$B/rules")" = f ] && [ "$(cat "$B/CLAUDE.md")" = old ] && grep -q "^sudo\[-n\]\[-u\]\[coder\]\[--\]\[mv\]\[-T\]" "$T/calls"'
+  eval '[ -n "$B" ] && [ "$(cat "$B/settings.local.json")" = mine ] && [ "$(cat "$B/skills/x")" = s ] && [ "$(cat "$B/CLAUDE.md")" = old ] && grep -q "^sudo\[-n\]\[-u\]\[coder\]\[--\]\[mv\]\[-T\]" "$T/calls"'
+check "... after stopping every coder process (sessions started before the sandbox)" \
+  eval 'called "pkill[-TERM][-u][coder]" && called "pkill[-KILL][-u][coder]" && [ "$(grep -n "^pkill\[-TERM" "$T/calls" | cut -d: -f1)" -lt "$(grep -n "\[mv\]" "$T/calls" | head -n1 | cut -d: -f1)" ]'
 check "the dirs the sandbox binds: created empty as coder, mode 700" \
   eval 'for d in rules commands agents skills output-styles plugins; do called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.claude/$d]" && [ -d "$R/home/coder/.claude/$d" ] && [ ! -L "$R/home/coder/.claude/$d" ] || exit 1; done && [ -z "$(ls -A "$R/home/coder/.claude/skills")" ]'
 check "the move happens once: root-owned marker in /var/lib/claw-install" eval '[ -e "$R/var/lib/claw-install/coder-claude-moved" ]'
@@ -82,7 +89,7 @@ check "settings files the sandbox binds: created as coder with {}" \
   eval '[ "$(cat "$R/home/coder/.claude/settings.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude/settings.local.json")" = "{}" ]'
 check "coder's .claude.json copied into its .claude as coder (Claude Code's state file moves there)" \
   eval 'called "sudo[-n][-u][coder][--][cp][$R/home/coder/.claude.json][$R/home/coder/.claude/.claude.json]" && [ "$(cat "$R/home/coder/.claude/.claude.json")" = "{\"state\":1}" ]'
-check "coder's CLAUDE.md is an empty file, as coder" \
+check "coder's CLAUDE.md is a new empty file, as coder" \
   eval 'called "sudo[-n][-u][coder][--][install][-m][600][/dev/null][$R/home/coder/.claude/CLAUDE.md]" && [ -f "$R/home/coder/.claude/CLAUDE.md" ] && [ ! -s "$R/home/coder/.claude/CLAUDE.md" ]'
 check "drop-ins installed root:root 644 in /etc/systemd/user/openclaw-gateway.service.d/" \
   eval 'called "install[-d][-m][755][-o][root][-g][root][$R$DD]" && grep -q "^install\[-m\]\[644\]\[-o\]\[root\]\[-g\]\[root\]\[gateway-dropins/.*\]\[$R$DD/\]$" "$T/calls" && for f in gateway-dropins/*.conf; do cmp -s "$f" "$R$DD/${f##*/}" || exit 1; done'
@@ -97,9 +104,9 @@ echo mine > "$C/settings.local.json"; echo s > "$C/skills/x"; echo mine > "$C/CL
 rm -rf "$C/agents" "$C/rules"; ln -s "$R/home/coder/.config" "$C/agents"; echo f > "$C/rules"
 echo '{"a":1}' > "$C/settings.json"; ln "$C/settings.json" "$C/linked"
 run
-check "later install: no errors" eval '[ $rc = 0 ] && [ ! -s "$T/out" ] && [ "$(ls -d "$C"/pre-sandbox-* | wc -l)" = 1 ]'
-check "later install: contents kept (CLAUDE.md emptied)" \
-  eval '[ "$(cat "$C/settings.local.json")" = mine ] && [ "$(cat "$C/skills/x")" = s ] && [ ! -s "$C/CLAUDE.md" ]'
+check "later install: no errors, nothing moved, no process stopped" eval '[ $rc = 0 ] && [ ! -s "$T/out" ] && [ "$(ls -d "$C"/pre-sandbox-* | wc -l)" = 1 ] && ! grep -q "^pkill" "$T/calls"'
+check "later install: contents kept" \
+  eval '[ "$(cat "$C/settings.local.json")" = mine ] && [ "$(cat "$C/skills/x")" = s ] && [ "$(cat "$C/CLAUDE.md")" = mine ]'
 check "later install: a symlink or a file where a dir is bound: removed as coder, a dir made" \
   eval 'called "sudo[-n][-u][coder][--][rm][-rf][$C/agents]" && called "sudo[-n][-u][coder][--][rm][-rf][$C/rules]" && [ -d "$C/agents" ] && [ ! -L "$C/agents" ] && [ -d "$C/rules" ] && [ -d "$R/home/coder/.config" ]'
 check "later install: a hard-linked protected file is replaced by a new one" \
