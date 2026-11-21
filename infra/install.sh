@@ -116,7 +116,9 @@ sudo -H -u coder git -C /home/coder config --global user.email claude@claw.inval
 gateway_dropins_install
 
 systemctl daemon-reload
-systemctl enable --now claw-sync.timer claw-backup.timer claw-denywatch.timer
+systemctl enable --now claw-backup.timer claw-denywatch.timer
+# claw-install pauses claw-sync around an install and starts its timer again itself
+if [ "${CLAW_SYNC_PAUSED:-}" = 1 ]; then systemctl enable claw-sync.timer; else systemctl enable --now claw-sync.timer; fi
 # installs by hand only (sudo claw-install) while /etc/claw/manual-install exists
 if [ -e /etc/claw/manual-install ]; then
   systemctl disable --now claw-install-auto.timer 2>/dev/null || true
