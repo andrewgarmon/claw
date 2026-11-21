@@ -1,0 +1,3 @@
+[submodule "workspace/private"]
+	path = workspace/private
+	url = https://github.com/andrewgarmon/claw-private.git

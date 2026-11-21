@@ -14,7 +14,7 @@ set -euo pipefail
 umask 077
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export HOME=/root
-REPO=https://github.com/andrewgarmon/claw-config.git
+REPO=https://github.com/andrewgarmon/claw.git
 TOKEN_FILE=/home/coder/.config/coder.env
 STATE=/var/lib/claw-install
 WORK_BASE=/root
@@ -36,7 +36,7 @@ read_token() {
   fi
   if [ -z "$t" ]; then
     [ -t 0 ] || die "no token in $TOKEN_FILE and no terminal to ask for one"
-    read -rsp "No GitHub token in $TOKEN_FILE. Paste a read-only token for claw-config (not saved): " t; echo >&2
+    read -rsp "No GitHub token in $TOKEN_FILE. Paste a read-only GitHub token (not saved): " t; echo >&2
   fi
   [[ "$t" =~ ^[A-Za-z0-9_]{20,255}$ ]] || die "token doesn't look like a GitHub token"
   GH_TOKEN=$t; export GH_TOKEN

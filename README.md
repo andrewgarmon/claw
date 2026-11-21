@@ -15,11 +15,12 @@ Config, rules and host plumbing for a personal AI assistant on [OpenClaw](https:
 
 ## Layout
 - `openclaw.json`: OpenClaw config. Personal values come from `~/.openclaw/.env` via `${VAR}`.
-- `workspace/AGENTS.md`: the agent's operating rules. `workspace/local/AGENTS.md.example` is the template for the private, per-install rules file.
-- `skills/`: shared skills. Private ones live in `workspace/skills/` in the private repo.
+- `workspace/AGENTS.md`: the agent's operating rules.
+- `workspace/private/`: the install's private repo, a pinned submodule (persona, install-specific rules, private skills). `private.example/` shows its layout.
+- `skills/`: shared skills.
 - `infra/`: host scripts, systemd units and brokers. See [`infra/README.md`](infra/README.md).
 
-This repo is the shared half. The owner's private `claw-config` pulls it through sync PRs and adds the personal files (persona, install-specific rules, private skills). A push to main here starts that sync within about a minute (`.github/workflows/sync-dispatch.yml`: set the repo variable `SYNC_DISPATCH_REPO` to the config repo's name, and the secret `SYNC_DISPATCH_TOKEN` to a fine-grained token for only that repo with Actions: read and write). The config repo's daily run stays as a backstop.
+This repo is what the host deploys: claw-sync makes `~/.openclaw` match main within about a minute of a merge, with the private submodule at the commit main pins. A forked install points `workspace/private` at its own private repo (SETUP.md).
 
 ## Security model
 - **One job per Linux user:** the admin user (sudo), `openclaw` (the agent, no sudo), `coder` (Claude Code, read-only GitHub token), `gitbot` (GitHub writes), `calbot` (calendar password).
