@@ -427,4 +427,40 @@ run; check "plugin dir gone, backup still stale: the stale alert stays" eval '[ 
 touch "$B"; rm -f "$S/last-full"
 run; check "tripwire clear: healthy again" eval '[ $rc = 0 ] && pinged "" "up to date"'
 
+# Private submodule (workspace/private, pinned by gitlink): checked out with the tree, drift and
+# untracked files inside it reverted, rolled back with the tree, URL always from .gitmodules.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=protocol.file.allow GIT_CONFIG_VALUE_0=always   # local submodule URLs
+P_=$O/workspace/private
+git init -q --bare -b main "$T/private.git"; git clone -q "$T/private.git" "$T/pdev" 2>/dev/null; git -C "$T/pdev" checkout -q -b main
+pcommit() { echo "$1" > "$T/pdev/SOUL.md"; git -C "$T/pdev" add -A && git -C "$T/pdev" commit -qm "$1" && { [ "${2:-}" = nopush ] || git -C "$T/pdev" push -q origin main 2>/dev/null; }; git -C "$T/pdev" rev-parse HEAD; }
+sub_head() { [ "$(git -C "$P_" rev-parse HEAD 2>/dev/null)" = "$1" ]; }
+bump() { git -C "$T/dev/workspace/private" fetch -q "$T/pdev" main 2>/dev/null; git -C "$T/dev/workspace/private" checkout -q "$1"; }
+p1=$(pcommit soul1)
+git -C "$T/dev" submodule add -q "$T/private.git" workspace/private 2>/dev/null
+c40=$(commit '{"v":40}'); rm -f "$S/last-full"
+run; check "submodule added: checked out at the pinned commit" eval '[ $rc = 0 ] && head_is $c40 && sub_head $p1 && [ "$(cat "$P_/SOUL.md")" = soul1 ]'
+echo drift > "$P_/SOUL.md"; git -C "$O" config submodule.workspace/private.ignore all
+run; check "drift inside the submodule (hidden with submodule.*.ignore in .git/config): reverted" eval '[ $rc = 0 ] && [ "$(cat "$P_/SOUL.md")" = soul1 ]'
+git -C "$O" config --unset submodule.workspace/private.ignore
+echo x > "$P_/planted.md"; echo hidden > "$P_/hidden.md"; echo hidden.md >> "$(git -C "$P_" rev-parse --git-dir)/info/exclude"
+run; check "untracked files in the submodule (one hidden by its info/exclude): removed, fail ping names them" \
+  eval '[ $rc = 1 ] && pinged /fail "workspace/private/planted.md" && pinged /fail "workspace/private/hidden.md" && [ ! -e "$P_/planted.md" ] && [ ! -e "$P_/hidden.md" ]'
+git -C "$P_" update-index --assume-unchanged SOUL.md; echo edited > "$P_/SOUL.md"
+run; check "edit hidden with assume-unchanged in the submodule: reverted, flag cleared, named" \
+  eval '[ $rc = 1 ] && pinged /fail "hidden from git.*workspace/private/SOUL.md" && [ "$(cat "$P_/SOUL.md")" = soul1 ] && ! git -C "$P_" ls-files -v | grep -q "^[a-zS] "'
+p2=$(pcommit soul2); bump "$p2"; c41=$(commit '{"v":41,"CRASH":1}')
+run; check "gitlink bump with a broken config: tree and submodule rolled back" eval '[ $rc = 1 ] && head_is $c40 && sub_head $p1 && pinged /fail "rolled back"'
+c42=$(commit '{"v":42}')
+run; check "fixed: the bump deploys" eval '[ $rc = 0 ] && head_is $c42 && sub_head $p2 && [ "$(cat "$P_/SOUL.md")" = soul2 ]'
+git -C "$O" config submodule.workspace/private.url "$T/nowhere.git"
+p3=$(pcommit soul3); bump "$p3"; c43=$(commit '{"v":42}' README.md)
+run; check "a different submodule URL in .git/config: ignored, .gitmodules' URL used" eval '[ $rc = 0 ] && head_is $c43 && sub_head $p3'
+p4=$(pcommit soul4 nopush); bump "$p4"; c44=$(commit '{"v":42}' README.md); export CLAW_SYNC_FETCH_FAIL_RUNS=3
+run; check "pinned private commit can't be fetched: stays put, no ping yet" eval '[ $rc = 0 ] && head_is $c43 && sub_head $p3 && ! pinged /fail ""'
+run; run; check "... and after FETCH_FAIL_RUNS in a row: fail ping" eval '[ $rc = 1 ] && head_is $c43 && pinged /fail "private submodule"'
+git -C "$T/pdev" push -q origin main 2>/dev/null
+run; check "pushed: deploys, healthy" eval '[ $rc = 0 ] && head_is $c44 && sub_head $p4'
+git -C "$O" submodule deinit -q -f workspace/private
+run; check "submodule de-initialised: checked out again" eval '[ $rc = 0 ] && sub_head $p4'
+
 echo; [ $fails = 0 ] && echo "all claw-sync tests passed" || { echo "$fails failed"; exit 1; }

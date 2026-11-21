@@ -42,6 +42,7 @@ BACKUP_OK=$HOME/.cache/claw-backup/last-ok      # touched by claw-backup on ever
 BACKUP_MAX_AGE=${CLAW_SYNC_BACKUP_MAX_AGE:-93600}  # 26h: nightly at ~03:30, plus jitter and slack
 GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected in ~/.openclaw/extensions (claw-smoke has the same list)
 INSTALLED=${CLAW_SYNC_INSTALLED:-/var/lib/claw-install/last}  # claw-install's last commit (root-owned, 644)
+SUB=workspace/private                           # the install's private repo, a pinned submodule
 REMOVED=$STATE/removed                          # untracked files are moved here, not deleted
 REMOVED_DAYS=${CLAW_SYNC_REMOVED_DAYS:-30}      # ... and kept this long
 REMOVED_MAX_MB=${CLAW_SYNC_REMOVED_MAX_MB:-200}  # past this in all, removed files are deleted instead
@@ -155,7 +156,39 @@ untracked_at() {
   git -c core.excludesFile=/dev/null ls-files --others --exclude-from="$ign" "$@" || rc=$?
   rm -f "$ign"; return "$rc"
 }
-untracked() { untracked_at HEAD "$@"; }
+# Inside the private submodule nothing is state and nothing is ignored: every untracked file counts,
+# whatever its .gitignore or info/exclude says. Listed as $SUB/<path>.
+untracked() { untracked_at HEAD "$@" && sub_untracked "$@"; }
+sub_untracked() {
+  local f
+  sub_init || return 0
+  git -C "$SUB" ls-files --others -z | while IFS= read -r -d '' f; do
+    if [ "${1:-}" = -z ]; then printf '%s\0' "$SUB/$f"; else printf '%s\n' "$SUB/$f"; fi
+  done
+}
+# sub_init: the submodule is checked out (never run git -C $SUB otherwise: it would act on ~/.openclaw)
+sub_init() { [ -e "$SUB/.git" ]; }
+# sub_checkout: make the submodule match HEAD's gitlink exactly. The URL comes from the committed
+# .gitmodules (sync), never from .git/config, which the agent's user can write; --checkout overrides
+# any submodule.*.update command set there. Flags are cleared and drift reset; untracked files are
+# left for the caller's removal loop.
+sub_checkout() {
+  [ -f .gitmodules ] || return 0
+  git submodule sync -q && git submodule update -q --init --force --checkout || return 1
+  sub_init || return 1
+  git -C "$SUB" ls-files -v -z | while IFS= read -r -d '' e; do
+    case ${e:0:1} in [a-z]|S) printf '%s\0' "${e:2}" ;; esac
+  done > "$STATE/sub-flagged"
+  if [ -s "$STATE/sub-flagged" ]; then
+    hidden+="$(tr '\0' ' ' < "$STATE/sub-flagged" | sed "s|[^ ]*|$SUB/&|g")"
+    xargs -0r git -C "$SUB" update-index -q --no-assume-unchanged -- < "$STATE/sub-flagged"
+    xargs -0r git -C "$SUB" update-index -q --no-skip-worktree -- < "$STATE/sub-flagged"
+  fi
+  rm -f "$STATE/sub-flagged"
+  git -C "$SUB" reset -q --hard
+}
+# checkout <rev>: the tree and the submodule at <rev>
+checkout() { git reset -q --hard "$1" && sub_checkout; }
 # flagged [-z]: tracked files marked assume-unchanged or skip-worktree. git diff doesn't look at those,
 # so the agent's user could set the flag and edit the file in place unseen. They count as drift.
 flagged() {
@@ -164,10 +197,13 @@ flagged() {
     case ${e:0:1} in [a-z]|S) if [ "$z" = -z ]; then printf '%s\0' "${e:2}"; else printf '%s\n' "${e:2}"; fi ;; esac
   done
 }
-# clean_tree: no drift in tracked files (hidden or not) and no untracked files
+# clean_tree: no drift in tracked files (hidden or not) and no untracked files, in the submodule too.
+# --ignore-submodules=none: .git/config could otherwise tell git diff to ignore the submodule.
 clean_tree() {
   local u f
-  git diff --quiet HEAD && f=$(flagged) && [ -z "$f" ] && u=$(untracked) && [ -z "$u" ]
+  git diff --quiet --ignore-submodules=none HEAD && f=$(flagged) && [ -z "$f" ] && u=$(untracked) && [ -z "$u" ] || return 1
+  [ -f .gitmodules ] || return 0
+  sub_init && [ -z "$(git -C "$SUB" ls-files -v | grep -v '^[HMRCK?] ' || true)" ]
 }
 # protected <path>: never removed, whatever .gitignore says: the agent's state and secrets. One of these
 # showing up as untracked means the committed ignore rules are broken (e.g. a PR dropped a line), so
@@ -203,7 +239,7 @@ rollback() {
   local t=$1
   echo "$t" > "$STATE/bad"
   [ -n "$good" ] || { rm -f "$STATE/pending"; die "deploy of ${t:0:7} failed and there is no known-good commit on main to roll back to"; }
-  git reset -q --hard "$good"
+  checkout "$good" || echo "rollback: couldn't check out the private submodule at ${good:0:7}" >&2
   restart
   if ! healthy "$HEALTH_WAIT"; then
     # the known-good config doesn't come up either: the outage isn't this commit's fault
@@ -305,9 +341,20 @@ if [ -n "$fl" ]; then
   flagged -z | xargs -0r git update-index -q --no-assume-unchanged --
   flagged -z | xargs -0r git update-index -q --no-skip-worktree --
 fi
-[ "$before" = "$want" ] && ! git diff --quiet HEAD && echo "reverting local drift: $(git diff --name-only HEAD | tr '\n' ' ')"
+[ "$before" = "$want" ] && ! git diff --quiet --ignore-submodules=none HEAD && echo "reverting local drift: $(git diff --ignore-submodules=none --name-only HEAD | tr '\n' ' ')"
 git checkout -q main 2>/dev/null || true
-git reset -q --hard "$want"
+if ! checkout "$want"; then
+  # the private submodule couldn't be fetched or checked out: put everything back and treat it like a
+  # failed git fetch (fail-ping only after FETCH_FAIL_RUNS in a row)
+  rm -f "$STATE/pending"
+  checkout "$before" || true
+  n=$(( $(cat "$STATE/sub-fails" 2>/dev/null || echo 0) + 1 ))
+  echo "$n" > "$STATE/sub-fails"
+  [ "$n" -lt "$FETCH_FAIL_RUNS" ] || die "couldn't check out the private submodule at ${want:0:7}, $n runs in a row"
+  echo "couldn't check out the private submodule at ${want:0:7} ($n in a row); staying on ${before:0:7}" >&2
+  exit 0
+fi
+rm -f "$STATE/sub-fails"
 # listed after the reset, so a file the new commit tracks isn't reported; -x is never passed
 left=$(untracked)
 if [ -n "$left" ]; then
@@ -353,7 +400,7 @@ if [ "$cfg_new" = "$cfg_before" ]; then
 fi
 
 if ! validate; then
-  git reset -q --hard "$before"
+  checkout "$before" || true
   echo "$want" > "$STATE/bad"; rm -f "$STATE/pending"
   die "INVALID openclaw.json at ${want:0:7}; rolled back to ${before:0:7}, gateway not restarted"
 fi

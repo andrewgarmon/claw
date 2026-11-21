@@ -1,6 +1,7 @@
 # Allowlist: ignore everything, then opt in. Secrets live in .env (never committed).
 /*
 !/.gitignore
+!/.gitmodules
 !/README.md
 !/SETUP.md
 !/.github/
@@ -8,14 +9,18 @@
 !/workspace/
 /workspace/*
 !/workspace/*.md
+# nothing is tracked here (private skills live in workspace/private/skills), but un-ignored so claw-sync
+# removes any skill planted here
 !/workspace/skills/
-!/workspace/local/
+# the install's private repo (SOUL.md, IDENTITY.md, AGENTS.md, skills/): a pinned submodule
+!/workspace/private
 # the reader agent's workspace: only its rules are tracked (it has no memory)
 !/workspace-reader/
 /workspace-reader/*
 !/workspace-reader/AGENTS.md
-# public skills (shared with the upstream repo; see AGENTS.md "Skills: private by default")
+# public skills (see AGENTS.md "Skills: private by default"), and the private repo's template
 !/skills/
+!/private.example/
 
 # agent-owned state: lives on disk, not in git
 workspace/USER.md

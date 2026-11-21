@@ -171,7 +171,7 @@ chmod +x "$BIN/claude-usage"
 
 touch "$T/token_bad"
 run; check "gitbot token revoked: FAIL, points at the log, no secret" \
-  eval '[ $rc = 1 ] && says "FAIL agent-git-token: issue-list on claw-config failed (exit 1)" && says "agent-git.log"'
+  eval '[ $rc = 1 ] && says "FAIL agent-git-token: issue-list on claw failed (exit 1)" && says "agent-git.log"'
 rm "$T/token_bad"
 
 touch "$T/no_refuse"
