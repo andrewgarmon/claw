@@ -20,8 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
       - name: Install the OpenClaw version the config was last written by
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # reads the base branch's copy of the script
       - name: Check
@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # scan full history: a secret added then removed in a PR still lands in main via the merge
       - name: gitleaks
@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # the range check reads every commit in the PR or push
       - name: Check against PERSONAL_DENYLIST
@@ -131,7 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Check
         run: |
           fail=0
@@ -147,12 +147,25 @@ jobs:
           [ "$fail" = 0 ] && echo "ok"
           exit "$fail"
 
+  pinned:
+    name: actions pinned to a commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check
+        # a tag can be moved to new code; a full commit SHA can't (Dependabot proposes the bumps)
+        run: |
+          ! grep -nE '^\s*(-\s*)?uses:' .github/workflows/*.yml | grep -vE 'uses:\s*[^@ ]+@[0-9a-f]{40}(\s|$)' | grep . \
+            || { echo "::error::pin these to a full commit SHA (with the version in a comment)"; exit 1; }
+          echo ok
+
   shellcheck:
     name: shell scripts lint clean
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: shellcheck
         run: |
           # every tracked file with a sh/bash shebang (infra/ now, gates/ later)
@@ -166,7 +179,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Run
         # Every infra/tests/*.test.sh and infra/brokers/*/test.sh, in parallel, so adding a test
         # needs no workflow edit. Each fakes what it needs (origin, gh, systemctl, ...) in a temp dir.
