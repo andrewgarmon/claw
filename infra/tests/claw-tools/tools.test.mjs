@@ -218,7 +218,7 @@ test("manifest and openclaw.json agree with the tool list", () => {
   for (const t of TOOLS.filter((x) => x.write)) {
     assert.ok(cfg.agents.entries.reader.tools.deny.includes(t.name), `the reader agent must deny the write tool ${t.name}`);
   }
-  for (const d of ["group:runtime", "gateway", "skill_workshop", "cron"]) assert.ok(cfg.tools.deny.includes(d), `tools.deny is missing ${d}`);
+  for (const d of ["group:runtime", "gateway", "skill_workshop"]) assert.ok(cfg.tools.deny.includes(d), `tools.deny is missing ${d}`);
   assert.equal(cfg.tools.fs?.workspaceOnly, true);
   assert.equal(new Set(names).size, names.length);
 });

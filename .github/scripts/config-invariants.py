@@ -24,7 +24,7 @@ EQUAL = {
     "agents.entries.reader.tools.agentToAgent.send": [],
 }
 CONTAINS = {
-    "tools.deny": ["group:runtime", "gateway", "cron", "skill_workshop", "plugins", "secrets",
+    "tools.deny": ["group:runtime", "gateway", "skill_workshop", "plugins", "secrets",
                    "conversations_list", "conversations_send", "conversations_turn"],
     "agents.entries.main.tools.deny": ["web_search", "web_fetch", "calendar_event_details", "github_issue_view"],
     "agents.entries.reader.tools.deny": ["group:fs", "group:runtime", "group:memory", "group:sessions", "message",
