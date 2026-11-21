@@ -156,6 +156,27 @@ Quick health check (timer, gateway, recent logs, memory): `claw-status` (as the 
   - `compile-cache.conf`: Sets `NODE_COMPILE_CACHE` for faster restarts.
 - After a change, `claw-install` runs `systemctl --user daemon-reload` as openclaw and restarts the gateway (Applying infra). Check with `... systemctl --user cat openclaw-gateway` (OpenClaw's `ExecStart` plus the drop-ins from `/etc/systemd/user/`) and `sudo cat /proc/$(pgrep -u openclaw -f 'openclaw.*gateway' | head -1)/environ | tr '\0' '\n' | grep NODE_OPTIONS`.
 
+## Backlog worker
+`claw-backlog` hands `claude-ready` issues to Claude Code when weekly Claude usage would otherwise go unused. `claw-backlog.timer` runs it hourly as openclaw. **All its rules are in `backlog-worker.json`** at the repo root (next to `openclaw.json`, out of reach of the agent's file tools). To change one, edit that file in a PR: claw-sync deploys it within a minute and the next hourly check uses it. No install needed, and the script itself never changes.
+
+| Key | Meaning |
+| --- | --- |
+| `enabled` | `false` turns it off. |
+| `when.localHours` | `[start, end]`: only between these hours, host time (`[9, 21]` is 09:00-20:59; `[22, 6]` spans midnight; `[0, 24]` is any time). Keep it to hours you're awake: each hand-off waits for your Approve tap (up to 10 minutes). |
+| `when.hoursBeforeWeeklyReset` | Only when the weekly limit resets within this many hours (`168`: any time in the week). |
+| `when.minHoursBetweenRuns` | Hours to wait after a hand-off before the next. |
+| `usage.weeklyBelowPercent` | Only while weekly usage is below this. |
+| `usage.sessionBelowPercent` | Only while the 5-hour window is below this. |
+| `pick.repos` | Repos to take issues from, in order (names as agent-git takes them). |
+| `pick.label` | The label an issue needs. |
+| `pick.skipLabels` | Issues with any of these are left alone. |
+| `pick.preferLabels` | Picked first, in this order; then the oldest. |
+| `pick.maxIssuesPerRun`, `pick.maxIssuesPerWeek` | Caps (the week is the Claude weekly window). |
+
+Each run stops quietly at the first rule that says no, cheapest first (hours, then the gap, then `claude-usage`, then the issue list), and logs one line saying why. If usage can't be read (no plan limits), it does nothing. When everything passes it starts one agent turn in the main session (`openclaw agent --agent main --deliver`) naming the issues by repo and number only, never their titles. The agent hands each to Claude Code (one Approve tap each), and you get the PR links in Telegram. An issue handed off isn't picked again for 14 days, even if you tapped Deny. No model is called unless something is handed off.
+
+**Check it:** `sudo -u openclaw claw-backlog --dry-run` says what it would do now and starts nothing. `journalctl -u claw-backlog` has each decision; `claw-status` shows the last two. State (last hand-off, this week's count, issues handed off) is in `/home/openclaw/.cache/claw-backlog/state.json`; delete it to start over. A bad `backlog-worker.json` fails CI (`infra/tests/claw-backlog.test.sh` checks it) and, on the host, fails the unit with the reason instead of guessing.
+
 ## The main agent's tools
 The assistant has no shell: `openclaw.json` denies `group:runtime` (`exec`, `process`, `code_execution`) and the `gateway` tool, and `tools.fs.workspaceOnly: true` limits `read`/`write`/`edit`/`apply_patch` to `~/.openclaw/workspace` (memory and to-dos stay writable; `openclaw.json`, `.env` and the extensions dirs are out of reach). Skills outside the workspace (`~/.openclaw/skills`, plugin skills) stay usable: OpenClaw's `skills_read` loads a skill's `SKILL.md` by name from the eligible catalog, and a `read` grant also permits it. Inbound attachments saved outside the workspace may not be readable with `read`; check from Telegram after deploying. It reaches the brokers only through the **claw-tools** plugin (`infra/openclaw-plugins/claw-tools/`, root-owned, see Plugins):
 - `calendar_list_calendars`, `calendar_events`, `calendar_create`, `calendar_update`, `calendar_delete`, `calendar_undo`, `calendar_changes` → `agent-cal` as calbot;
