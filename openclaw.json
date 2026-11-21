@@ -354,7 +354,10 @@
       "skill_workshop",
       "cron",
       "group:runtime",
-      "gateway"
+      "gateway",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn"
     ],
     "fs": {
       "workspaceOnly": true
