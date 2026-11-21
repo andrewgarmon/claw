@@ -352,7 +352,6 @@
       "plugins",
       "secrets",
       "skill_workshop",
-      "cron",
       "group:runtime",
       "gateway",
       "conversations_list",
