@@ -11,7 +11,7 @@ T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 H=$T/home BIN=$T/bin CB=$T/claw-backup
 mkdir -p "$H/.openclaw/workspace" "$BIN"
 sed -e "s|^export HOME=/home/openclaw$|export HOME=$H|" \
-    -e "s|^export PATH=/usr/local/bin:/usr/bin:/bin$|export PATH=$BIN:/usr/bin:/bin|" \
+    -e "s|^export PATH=\$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin$|export PATH=$BIN:/usr/bin:/bin|" \
     -e "s|^AGE_RECIPIENTS=.*|AGE_RECIPIENTS=$T/backup.age.pub|" "$D/claw-backup" > "$CB"
 [ "$(grep -c "^export HOME=$H$\|^export PATH=$BIN:\|^AGE_RECIPIENTS=$T/" "$CB")" = 3 ] || { echo "FAIL could not point claw-backup at the test dir"; exit 1; }
 
@@ -37,6 +37,18 @@ cat > "$BIN/sudo" <<EOF
 cat > /dev/null
 [ -e "$T/reject" ] && { echo "agent-git: refused: this would replace the history (non-fast-forward)" >&2; exit 1; }
 echo "https://github.com/x/claw-state/pull/1"
+EOF
+# fake openclaw automations: list and get from the job files in $T/jobs (as get returns them, run
+# state included); both fail while $T/jobs_fail exists
+mkdir -p "$T/jobs"
+cat > "$BIN/openclaw" <<EOF
+#!/bin/bash
+[ ! -e "$T/jobs_fail" ] || { echo "gateway not reachable" >&2; exit 1; }
+case "\$1 \$2" in
+  "automations list") python3 -c 'import json, os, sys; print(json.dumps({"jobs": [{"id": f[:-5], "name": f} for f in sorted(os.listdir(sys.argv[1]))]}))' "$T/jobs" ;;
+  "automations get") cat "$T/jobs/\$3.json" ;;
+  *) exit 2 ;;
+esac
 EOF
 cat > "$BIN/curl" <<EOF
 #!/bin/bash
@@ -77,6 +89,27 @@ check "nothing new after a good retry: exit 0, no ping" '[ $rc = 0 ] && [ ! -s "
 touch -d '2 days ago' "$H/.cache/claw-backup/last-ok"
 run
 check "nothing new: still touches last-ok" '[ $rc = 0 ] && grep -q "nothing new" "$T/out" && [ -n "$(find "$H/.cache/claw-backup/last-ok" -newermt "1 minute ago")" ]'
+
+# ---------- scheduled jobs ----------
+echo "$ENV_LINE" > "$H/.openclaw/.env"; J=$H/.openclaw/state-backup
+echo '{"id":"daily-briefing","name":"daily-briefing","schedule":{"kind":"cron","expr":"30 9 * * *"},"state":{"nextRunAtMs":1}}' > "$T/jobs/daily-briefing.json"
+echo '{"id":"walk-1500","name":"walk","schedule":{"kind":"at","at":"2026-11-22T15:00:00-05:00"},"state":{"nextRunAtMs":2}}' > "$T/jobs/walk-1500.json"
+run
+mkdir -p "$T/rj" && decrypt "$J/state.tar.gz.age" | tar -xz -C "$T/rj"
+check "scheduled jobs: each definition is in the backup as automations/<id>.json, without its run state" \
+  '[ $rc = 0 ] && grep -q "30 9" "$T/rj/automations/daily-briefing.json" && grep -q "15:00" "$T/rj/automations/walk-1500.json" && ! grep -q nextRunAtMs "$T/rj/automations/"*.json'
+cj=$(git -C "$J" rev-parse HEAD); sed -i 's/"nextRunAtMs":1/"nextRunAtMs":99/' "$T/jobs/daily-briefing.json"
+run
+check "only a job's run state changed: no new commit" '[ $rc = 0 ] && [ "$(git -C "$J" rev-parse HEAD)" = "$cj" ]'
+sed -i 's/30 9/45 9/' "$T/jobs/daily-briefing.json"
+run
+check "a job's schedule changed: a new commit" '[ $rc = 0 ] && [ "$(git -C "$J" rev-parse HEAD)" != "$cj" ] && grep -q committed "$T/out"'
+cj=$(git -C "$J" rev-parse HEAD); touch "$T/jobs_fail"; echo "v3" > "$H/.openclaw/workspace/MEMORY.md"
+run
+check "job export fails: the rest is still committed and pushed, then the run fails with a /fail ping" \
+  '[ $rc != 0 ] && [ "$(git -C "$J" rev-parse HEAD)" != "$cj" ] && grep -q "pushed" "$T/out" && grep -q "jobs weren.t exported" "$T/out" && grep -q "hc.example/check/fail" "$T/curl.log"'
+rm "$T/jobs_fail" "$T/jobs/"*.json
+run
 
 # ---------- encryption ----------
 echo "$ENV_LINE" > "$H/.openclaw/.env"
