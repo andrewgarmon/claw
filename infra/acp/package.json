@@ -2,6 +2,6 @@
   "name": "claw-acp-adapter",
   "private": true,
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.107.3"
+    "@agentclientprotocol/claude-agent-acp": "0.108.1"
   }
 }
