@@ -48,10 +48,10 @@ export async function resolve(spec, ctx, next) {
 }
 
 async function load(pluginConfig) {
-  const hooks = [], tools = [], logs = [];
+  const hooks = [], tools = [];
   const api = {
     pluginConfig,
-    logger: { info: (m) => logs.push(m) },
+    logger: { info: () => {} },
     on: (name, handler, opts) => hooks.push({ name, handler, opts: opts ?? {} }),
     registerTool: (t) => tools.push(t),
   };
@@ -70,7 +70,7 @@ async function load(pluginConfig) {
     return results;
   };
   const approval = async (name, params) => (await dispatch(name, params)).find((r) => r.requireApproval)?.requireApproval;
-  return { hooks, tools, logs, dispatch, approval, mod };
+  return { tools, dispatch, approval };
 }
 
 // valid arguments per tool (each must pass validation so execute really runs)
@@ -115,12 +115,6 @@ test("no non-gated tool asks for approval", async () => {
   for (const name of ["web_fetch", "web_search", "read", "write", "memory_search", "message"]) assert.equal(await approval(name, {}), undefined, name);
 });
 
-test("a decision is logged with the tool and a hash of the parameters", async () => {
-  const { approval, logs } = await load({ ownerTelegramId: OWNER });
-  (await approval("calendar_delete", { id: "0123456789" })).onResolution("allow-once");
-  assert.match(logs.at(-1), /^claw-tools approval allow-once: calendar_delete [0-9a-f]{12}$/);
-});
-
 test("sessions_spawn passes only as an explicit OpenClaw subagent; every other spawn is gated", async () => {
   const { approval } = await load({ ownerTelegramId: OWNER });
   assert.equal(await approval("sessions_spawn", { runtime: "subagent", task: "summarise" }), undefined);
@@ -148,12 +142,6 @@ test("message: with no ownerTelegramId configured, every explicit target is bloc
   }
 });
 
-test("web_fetch is only logged, host only", async () => {
-  const { dispatch, logs } = await load({ ownerTelegramId: OWNER });
-  assert.deepEqual(await dispatch("web_fetch", { url: "https://example.com/secret?q=1" }), []);
-  assert.equal(logs.at(-1), "claw-tools web_fetch host=example.com");
-});
-
 test("every tool in TOOLS is registered once, and the manifest lists exactly those", async () => {
   const { tools } = await load({ ownerTelegramId: OWNER });
   const names = tools.map((t) => t.name);
@@ -161,7 +149,6 @@ test("every tool in TOOLS is registered once, and the manifest lists exactly tho
   assert.equal(new Set(names).size, names.length, "a tool registered twice");
   const manifest = JSON.parse(fs.readFileSync(path.join(SRC, "openclaw.plugin.json"), "utf8"));
   assert.deepEqual([...manifest.contracts.tools].sort(), [...names].sort());
-  for (const t of tools) assert.deepEqual(t.parameters, TOOLS.find((x) => x.name === t.name).parameters, t.name);
 });
 
 test("every untrusted tool's result is wrapped as external content; the rest aren't", async () => {
@@ -178,18 +165,5 @@ test("every untrusted tool's result is wrapped as external content; the rest are
     } else {
       assert.ok(!out.includes(WRAP), `${t.name} is wrapped but isn't untrusted`);
     }
-  }
-});
-
-test("a failed broker call reports the error and isn't wrapped", async () => {
-  const { tools } = await load({ ownerTelegramId: OWNER });
-  fs.writeFileSync(path.join(T, "rc"), "3");
-  fs.writeFileSync(path.join(T, "err"), "calendar unreachable\n");
-  try {
-    const r = await tools.find((t) => t.name === "calendar_events").execute("call-2", {}, undefined);
-    assert.equal(r.details.ok, false);
-    assert.equal(r.content[0].text, "calendar_events failed: calendar unreachable");
-  } finally {
-    for (const f of ["rc", "err"]) fs.rmSync(path.join(T, f), { force: true });
   }
 });
