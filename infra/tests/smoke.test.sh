@@ -246,6 +246,8 @@ run; check "tools: shell not denied, fs not workspace-only, a claw-tools tool no
   eval '[ $rc = 1 ] && says "FAIL tools: not denied: group:runtime; tools.fs.workspaceOnly isn.t true; claw-tools tools not allowed: claude_usage"'
 cfg '{"plugins":{"allow":["duckduckgo","telegram","claw-tools"]},"tools":{"alsoAllow":["calendar_events","claude_usage"],"deny":["group:runtime","gateway","cron","skill_workshop"],"fs":{"workspaceOnly":true}}}'
 run; check "tools: all set: PASS" eval '[ $rc = 0 ] && says "PASS tools"'
+cfg '{"plugins":{"allow":["duckduckgo","telegram","claw-tools"]},"agents":{"entries":{"main":{"tools":{"deny":["claude_usage"]}},"reader":{"tools":{"alsoAllow":["claude_usage"]}}}},"tools":{"alsoAllow":["calendar_events"],"deny":["group:runtime","gateway","cron","skill_workshop"],"fs":{"workspaceOnly":true}}}'
+run; check "tools: a claw-tools tool allowed for one agent only: PASS" eval '[ $rc = 0 ] && says "PASS tools"'
 mv "$T/ocp/claw-tools" "$T/claw-tools.off"; plugins_json "$T/ocp/duckduckgo/node_modules/@openclaw/duckduckgo-plugin"
 run; check "tools: claw-tools not installed yet: SKIP" eval '[ $rc = 0 ] && says "SKIP tools: claw-tools isn.t installed"'
 mv "$T/claw-tools.off" "$T/ocp/claw-tools"
