@@ -12,6 +12,7 @@ set -uo pipefail
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ACP_LOCK=/usr/local/lib/claw/acp/package-lock.json
 CODER_ACP=/usr/local/bin/coder-acp
+CODER_SANDBOX=/usr/local/sbin/coder-acp-sandbox
 CLAUDE_USAGE=/usr/local/bin/claude-usage
 AGENT_GIT=/usr/local/bin/agent-git
 AGENT_CAL=/usr/local/bin/agent-cal
@@ -60,6 +61,17 @@ sys.exit(1)' < "$OUT/acp" 2>/dev/null) \
   [[ "$got" =~ ^[0-9A-Za-z.+-]{1,40}$ ]] || { FAIL acp-adapter "initialize reply has no usable agent version"; return; }
   [ "$got" = "$want" ] || { FAIL acp-adapter "adapter is $got but the lockfile pins $want (re-run: sudo claw-install)"; return; }
   PASS acp-adapter
+}
+
+# 1a. coder's sandbox holds: its probe, run in the same sandbox as the ACP sessions, finds /srv/work and
+#     Claude Code's session data writable, and the rest (settings, skills, home, system) read-only.
+check_sandbox() {
+  local rc n
+  timeout "$WAIT" "$CODER_SANDBOX" --check > "$OUT/sandbox" 2>&1; rc=$?
+  [ $rc != 0 ] || { PASS coder-sandbox; return; }
+  n=$(grep -c '^BAD' "$OUT/sandbox")
+  if [ "$n" -gt 0 ]; then FAIL coder-sandbox "$n path(s) not as they should be; see: sudo $CODER_SANDBOX --check"
+  else FAIL coder-sandbox "the sandbox didn't start ($(exited $rc)); see: sudo $CODER_SANDBOX --check"; fi
 }
 
 # 1b. Plan usage is readable (claude-usage, as openclaw -> coder). One call to the usage endpoint, no
@@ -247,6 +259,7 @@ PY
 }
 
 check_acp
+check_sandbox
 check_usage
 check_git_token
 # the refusal checks write DENY lines on purpose: record the window before they run (so a

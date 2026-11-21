@@ -82,6 +82,9 @@ id coder >/dev/null 2>&1 || adduser --disabled-password --gecos "" coder
 install -d -m 755 -o coder -g coder /srv/work
 install -m 755 -o root -g root coder-acp claude-usage /usr/local/bin/
 install -m 644 -o root -g root claude-usage.mjs /usr/local/lib/claw/
+# the sandbox coder-acp hands over to (root, through coder.sudoers), what it runs, and its self-check
+install -m 755 -o root -g root coder-acp-sandbox /usr/local/sbin/
+install -m 755 -o root -g root coder-acp-run coder-sandbox-probe /usr/local/lib/claw/
 # the ACP adapter coder-acp runs: exact versions from acp/package-lock.json, installed root-owned
 # (coder can run it, not change it), no install scripts. Reinstalled only when the lockfile changes;
 # built in a .new dir and swapped in, so a failed install leaves the old one working.
@@ -107,7 +110,7 @@ oc_plugins_install openclaw-plugins
 
 visudo -cf coder.sudoers
 install -m 440 -o root -g root coder.sudoers /etc/sudoers.d/coder
-coder_home_install   # ~coder/.config and ~/.claude (as coder), /etc/claude-code/CLAUDE.md
+coder_home_install   # ~coder dirs and sandbox files (as coder), /etc/claude-code/{CLAUDE.md,managed-settings.json}
 # coder's commit identity: agent-git checks author/committer against redact.txt for public repos
 sudo -H -u coder git -C /home/coder config --global user.name 'Claude Code'  # -C: coder can't stat root's cwd
 sudo -H -u coder git -C /home/coder config --global user.email claude@claw.invalid

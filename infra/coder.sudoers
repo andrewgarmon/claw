@@ -3,3 +3,8 @@
 Cmnd_Alias CLAW_AS_CODER = /usr/local/bin/coder-acp, /usr/local/bin/claude-usage
 Defaults!CLAW_AS_CODER env_reset, !setenv
 openclaw ALL=(coder) NOPASSWD: CLAW_AS_CODER
+
+# coder-acp hands over to its sandbox: root only to call systemd-run, which runs the adapter as
+# coder again. "" allows no arguments.
+Defaults!/usr/local/sbin/coder-acp-sandbox env_reset, !setenv
+coder ALL=(root) NOPASSWD: /usr/local/sbin/coder-acp-sandbox ""

@@ -28,7 +28,7 @@ exec /usr/bin/install "${a[@]}"'
 fake sudo "$LOGCALL"'
 [ "$1" = -n ] && shift; [ "$1" = -u ] || exit 2; u=$2; shift 2; [ "$1" = -- ] && shift
 for a in "${@:2}"; do
-  case $a in /*) ;; *) continue ;; esac
+  case $a in /dev/stdin|/dev/null) continue ;; /*) ;; *) continue ;; esac   # sources anyone can read
   if [ "$1" = rm ]; then p=$(realpath -m -- "$(dirname -- "$a")")/${a##*/}; else p=$(realpath -m -- "$a"); fi
   case $p in '"$R"'/home/"$u"|'"$R"'/home/"$u"/*) ;; *) echo "sudo: $u: permission denied: $a" >&2; exit 1 ;; esac
 done
@@ -59,17 +59,21 @@ snapshot() { (cd "$TGT" && stat -c '%a %u %g %n' . ./* && sha256sum ./*); }
 # ---------- upgrade from an install that wrote into the homes ----------
 fresh
 mkdir -p "$R/home/coder/.claude" "$R$OLD" "$R$DD"
-echo old > "$R/home/coder/.claude/CLAUDE.md"
+echo old > "$R/home/coder/.claude/CLAUDE.md"; echo mine > "$R/home/coder/.claude/settings.local.json"
 for f in gateway-dropins/*.conf; do echo old > "$R$OLD/${f##*/}"; done
 echo mine > "$R$OLD/mine.conf"; echo gone > "$R$DD/renamed.conf"
 run
 check "upgrade: no errors or warnings" eval '[ $rc = 0 ] && [ ! -s "$T/out" ]'
-check "coder's .config and .claude created as coder, mode 700" \
-  eval 'called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.config][$R/home/coder/.claude]" && [ "$(stat -c %a "$R/home/coder/.config" "$R/home/coder/.claude")" = "$(printf "700\n700")" ]'
+check "coder's dirs created as coder, mode 700 (with the ones the sandbox binds)" \
+  eval 'called "sudo[-n][-u][coder][--][install][-d][-m][700][$R/home/coder/.config][$R/home/coder/.claude][$R/home/coder/.cache][$R/home/coder/.npm][$R/home/coder/.claude/commands][$R/home/coder/.claude/agents][$R/home/coder/.claude/skills][$R/home/coder/.claude/output-styles]" && [ "$(stat -c %a "$R/home/coder/.config" "$R/home/coder/.claude/skills")" = "$(printf "700\n700")" ]'
 check "CLAUDE.md installed root:root 644 as Claude Code's managed memory, /etc/claude-code/CLAUDE.md" \
   eval 'called "install[-m][644][-o][root][-g][root][coder-CLAUDE.md][$R/etc/claude-code/CLAUDE.md]" && cmp -s coder-CLAUDE.md "$R/etc/claude-code/CLAUDE.md" && called "install[-d][-m][755][-o][root][-g][root][$R/etc/claude-code]"'
-check "the old CLAUDE.md in coder's home is removed, as coder" \
-  eval 'called "sudo[-n][-u][coder][--][rm][-f][$R/home/coder/.claude/CLAUDE.md]" && [ ! -e "$R/home/coder/.claude/CLAUDE.md" ]'
+check "managed settings installed root:root 644: hooks and MCP servers off" \
+  eval 'called "install[-m][644][-o][root][-g][root][coder-managed-settings.json][$R/etc/claude-code/managed-settings.json]" && python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d[\"allowManagedHooksOnly\"] is True and d[\"allowedMcpServers\"] == [] else 1)" "$R/etc/claude-code/managed-settings.json"'
+check "settings files the sandbox binds: created as coder with {} when missing, kept when there" \
+  eval '[ "$(cat "$R/home/coder/.claude/settings.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude.json")" = "{}" ] && [ "$(cat "$R/home/coder/.claude/settings.local.json")" = mine ]'
+check "the old CLAUDE.md in coder's home is emptied, as coder" \
+  eval 'called "sudo[-n][-u][coder][--][install][-m][600][/dev/null][$R/home/coder/.claude/CLAUDE.md]" && [ -f "$R/home/coder/.claude/CLAUDE.md" ] && [ ! -s "$R/home/coder/.claude/CLAUDE.md" ]'
 check "drop-ins installed root:root 644 in /etc/systemd/user/openclaw-gateway.service.d/" \
   eval 'called "install[-d][-m][755][-o][root][-g][root][$R$DD]" && grep -q "^install\[-m\]\[644\]\[-o\]\[root\]\[-g\]\[root\]\[gateway-dropins/.*\]\[$R$DD/\]$" "$T/calls" && for f in gateway-dropins/*.conf; do cmp -s "$f" "$R$DD/${f##*/}" || exit 1; done'
 check "a drop-in no longer in the repo is removed from /etc" eval '[ ! -e "$R$DD/renamed.conf" ]'
@@ -92,11 +96,13 @@ check "fresh host: installs cleanly" eval '[ $rc = 0 ] && [ ! -s "$T/out" ] && [
 # ---------- a symlink at every path in a home the installer used to write ----------
 # The target stands for a root-owned directory: owner, mode and contents must not change.
 for p in "$OLD" "$OLD/heap.conf" /home/openclaw/.config/systemd/user /home/openclaw/.config \
-         /home/coder/.claude /home/coder/.claude/CLAUDE.md /home/coder/.config; do
+         /home/coder/.claude /home/coder/.claude/CLAUDE.md /home/coder/.config \
+         /home/coder/.claude/settings.json /home/coder/.claude.json /home/coder/.claude/skills; do
   fresh
   case $p in
     */heap.conf) mkdir -p "$R${p%/*}"; ln -s "$TGT/heap.conf" "$R$p" ;;
     */CLAUDE.md) mkdir -p "$R${p%/*}"; ln -s "$TGT/CLAUDE.md" "$R$p" ;;
+    *.json) mkdir -p "$R${p%/*}"; ln -s "$TGT/x" "$R$p" ;;
     *) rm -rf "${R:?}$p"; mkdir -p "$R${p%/*}"; ln -s "$TGT" "$R$p" ;;
   esac
   before=$(snapshot)

@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Start Claude Code's ACP adapter as coder. OpenClaw's acpx runs: sudo -n -u coder /usr/local/bin/coder-acp
-# sudo clears the gateway's environment, so coder only gets its own read-only GitHub token.
-# The adapter is pinned by infra/acp/package-lock.json and installed root-owned by install.sh, so
-# nothing is fetched at session start and coder can run it but not change it.
+# Start Claude Code's ACP adapter as coder, in its sandbox. OpenClaw's acpx runs:
+#   sudo -n -u coder /usr/local/bin/coder-acp
+# This hands straight over to coder-acp-sandbox (root, through coder's own sudo rule: no arguments,
+# environment reset), which runs coder-acp-run as coder again inside a systemd sandbox. So nothing
+# openclaw may run as coder runs Claude Code outside it.
 set -euo pipefail
-export HOME=/home/coder
-export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
-ACP=/usr/local/lib/claw/acp/node_modules/.bin/claude-agent-acp
-[ -x "$ACP" ] || { echo "coder-acp: ACP adapter not installed at $ACP; run: sudo claw-install" >&2; exit 1; }
-if [ -f "$HOME/.config/coder.env" ]; then set -a; . "$HOME/.config/coder.env"; set +a; fi
-case "$PWD" in /srv/work|/srv/work/*) ;; *) cd /srv/work ;; esac
-exec "$ACP"
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin
+exec sudo -n /usr/local/sbin/coder-acp-sandbox

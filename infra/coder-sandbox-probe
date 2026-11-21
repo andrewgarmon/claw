@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# coder-sandbox-probe: run by `coder-acp-sandbox --check`, as coder inside the sandbox. Checks that
+# what should be writable is and what shouldn't be isn't, without changing anything: a file is opened
+# for appending and nothing written; a directory gets a new empty file, removed at once.
+# Prints one line per path; exit 1 if any is wrong.
+set -uo pipefail
+H=/home/coder
+bad=0
+can_write() {
+  if [ -d "$1" ]; then local f; f=$(mktemp -p "$1" .probe.XXXXXX 2>/dev/null) && rm -f "$f"
+  else ( : >> "$1" ) 2>/dev/null; fi
+}
+want() {  # want writable|read-only <path>
+  local got=read-only
+  if can_write "$2"; then got=writable; fi
+  if [ "$got" = "$1" ]; then echo "ok   $2 is $got"; else echo "BAD  $2 is $got"; bad=1; fi
+}
+want writable /srv/work
+want writable "$H/.claude"
+want writable "$H/.claude.json"
+for p in settings.json settings.local.json CLAUDE.md commands agents skills output-styles; do
+  want read-only "$H/.claude/$p"
+done
+want read-only "$H"
+want read-only /etc
+want read-only /usr/local/bin
+# agent-git runs through sudo, which no_new_privs would stop
+if grep -q '^NoNewPrivs:[[:space:]]*0$' /proc/self/status; then echo "ok   sudo can work (no_new_privs off)"
+else echo "BAD  no_new_privs is on: sudo -u gitbot agent-git can't work"; bad=1; fi
+exit "$bad"

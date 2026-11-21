@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# coder-acp-sandbox: run Claude Code's ACP adapter (coder-acp-run) as coder in a systemd sandbox, with
+# the caller's stdin/stdout (the ACP stream). coder-acp runs it through coder.sudoers (no arguments,
+# environment reset); it runs as root only to call systemd-run. All it takes from the caller is the
+# working directory, and only one under /srv/work.
+#
+# Inside, the filesystem is read-only except:
+#   /srv/work                          the repos
+#   ~/.claude, ~/.claude.json          Claude Code's session data, login and state
+#   ~/.cache, ~/.npm                   caches (if they exist)
+#   /home/gitbot, /run/sudo, ...       for agent-git, which coder runs through sudo (so it runs in
+#                                      here too, and there's no NoNewPrivileges); unix permissions
+#                                      still keep coder out of them
+# and /tmp is private. On top, everything in ~/.claude that would carry code or instructions into
+# later sessions is bound read-only (PROTECTED): settings (statusLine, apiKeyHelper, ... run commands),
+# CLAUDE.md, commands, agents, skills, output styles. They must exist (install.sh creates them as
+# coder), or the session doesn't start. A bind mount can't be renamed or removed from inside, so a
+# session can't swap them out. Hooks and MCP servers, from any settings or repo, are off by policy
+# (/etc/claude-code/managed-settings.json). The network stays open: GitHub, Anthropic and npm are needed.
+#
+# --check (root, from claw-smoke): run coder-sandbox-probe in the same sandbox instead; it reports
+# whether each of those paths is writable as it should be.
+set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+H=/home/coder
+WORK=/srv/work
+RUN=/usr/local/lib/claw/coder-acp-run
+PROBE=/usr/local/lib/claw/coder-sandbox-probe
+# "-": skipped if missing (and stays read-only)
+WRITABLE=("$WORK" "$H/.claude" "$H/.claude.json" "-$H/.cache" "-$H/.npm"
+          /home/gitbot -/run/sudo -/var/lib/sudo)
+PROTECTED=("$H/.claude/settings.json" "$H/.claude/settings.local.json" "$H/.claude/CLAUDE.md"
+           "$H/.claude/commands" "$H/.claude/agents" "$H/.claude/skills" "$H/.claude/output-styles")
+
+cmd=$RUN
+case "${1:-}" in
+  "") ;;
+  --check) cmd=$PROBE ;;
+  *) echo "usage: coder-acp-sandbox" >&2; exit 2 ;;
+esac
+[ "$(id -u)" = 0 ] || { echo "coder-acp-sandbox: run it through sudo" >&2; exit 1; }
+dir=$(pwd -P 2>/dev/null) || dir=$WORK
+case "$dir" in "$WORK"|"$WORK"/*) ;; *) dir=$WORK ;; esac
+
+# Mount-based options only: the seccomp-based ones (PrivateDevices, RestrictSUIDSGID, LockPersonality,
+# ProtectClock, ...) imply NoNewPrivileges for a service with User=, and agent-git needs sudo.
+props=(-p User=coder -p Group=coder -p "WorkingDirectory=$dir"
+       -p ProtectSystem=strict -p ProtectHome=read-only -p PrivateTmp=yes
+       -p ProtectKernelTunables=yes -p ProtectControlGroups=yes)
+for p in "${WRITABLE[@]}"; do props+=(-p "ReadWritePaths=$p"); done
+for p in "${PROTECTED[@]}"; do props+=(-p "ReadOnlyPaths=$p"); done
+exec systemd-run --quiet --pipe --wait --collect --service-type=exec "${props[@]}" "$cmd"

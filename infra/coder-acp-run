@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# The ACP adapter itself, as coder, inside coder-acp-sandbox's sandbox (started only from there).
+# sudo cleared the gateway's environment, so coder only gets its own read-only GitHub token.
+# The adapter is pinned by infra/acp/package-lock.json and installed root-owned by install.sh, so
+# nothing is fetched at session start and coder can run it but not change it.
+set -euo pipefail
+export HOME=/home/coder
+export PATH=$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin
+export GH_NO_UPDATE_NOTIFIER=1   # gh can't write its state file: home is read-only in here
+ACP=/usr/local/lib/claw/acp/node_modules/.bin/claude-agent-acp
+[ -x "$ACP" ] || { echo "coder-acp: ACP adapter not installed at $ACP; run: sudo claw-install" >&2; exit 1; }
+if [ -f "$HOME/.config/coder.env" ]; then set -a; . "$HOME/.config/coder.env"; set +a; fi
+case "$PWD" in /srv/work|/srv/work/*) ;; *) cd /srv/work ;; esac
+exec "$ACP"

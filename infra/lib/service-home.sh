@@ -6,7 +6,8 @@
 # broker users). Each of those users controls every path in its own home, including which ones are
 # symlinks, and tools like install, cp and mkdir follow symlinks. So:
 #   - files a service needs from this repo go root-owned under /etc, where the service reads them
-#     (systemd user drop-ins in /etc/systemd/user/, coder's CLAUDE.md in /etc/claude-code/);
+#     (systemd user drop-ins in /etc/systemd/user/, coder's CLAUDE.md and Claude Code settings in
+#     /etc/claude-code/);
 #   - directories in a home are created by that user: as_user <user> install -d -m 700 <dir>;
 #   - a file that has to live in a home is written by that user from stdin:
 #       as_user <user> install -m 600 /dev/stdin <dest> < <src>
@@ -19,17 +20,26 @@ CLAW_ROOT=${CLAW_ROOT:-}
 # as_user <user> <command>...: run a command as <user>, from / (the user can't stat root's cwd)
 as_user() { local u=$1; shift; (cd / && sudo -n -u "$u" -- "$@"); }
 
-# coder_home_install: coder's config dirs (created as coder) and its CLAUDE.md, installed root-owned
-# as Claude Code's managed memory file. Every coder session loads it; coder can read it, not change it.
+# coder_home_install: coder's config dirs and caches (created as coder); its CLAUDE.md, installed
+# root-owned as Claude Code's managed memory file, and the managed settings that turn hooks and MCP
+# servers off for every session (coder can read them, not change them). Plus, as coder, the files in
+# ~/.claude that coder-acp-sandbox binds read-only (a session doesn't start without them): empty if
+# missing, and the old CLAUDE.md copy emptied.
 coder_home_install() {
-  local R=$CLAW_ROOT
-  as_user coder install -d -m 700 "$R/home/coder/.config" "$R/home/coder/.claude" \
+  local R=$CLAW_ROOT C=$CLAW_ROOT/home/coder/.claude f
+  as_user coder install -d -m 700 "$R/home/coder/.config" "$C" "$R/home/coder/.cache" "$R/home/coder/.npm" \
+    "$C/commands" "$C/agents" "$C/skills" "$C/output-styles" \
     || { echo "install.sh: couldn't create ~coder/.config and ~coder/.claude as coder" >&2; return 1; }
   install -d -m 755 -o root -g root "$R/etc/claude-code"
   install -m 644 -o root -g root coder-CLAUDE.md "$R/etc/claude-code/CLAUDE.md"
-  # the copy older installs put in coder's home
-  as_user coder rm -f "$R/home/coder/.claude/CLAUDE.md" \
-    || echo "install.sh: couldn't remove ~coder/.claude/CLAUDE.md as coder; remove it by hand" >&2
+  install -m 644 -o root -g root coder-managed-settings.json "$R/etc/claude-code/managed-settings.json"
+  for f in "$C/settings.json" "$C/settings.local.json" "$R/home/coder/.claude.json"; do
+    as_user coder test -e "$f" || printf '{}\n' | as_user coder install -m 600 /dev/stdin "$f" \
+      || { echo "install.sh: couldn't create $f as coder" >&2; return 1; }
+  done
+  # the copy older installs put in coder's home: emptied, not removed (the sandbox binds it)
+  as_user coder install -m 600 /dev/null "$C/CLAUDE.md" \
+    || { echo "install.sh: couldn't empty ~coder/.claude/CLAUDE.md as coder" >&2; return 1; }
 }
 
 # gateway_dropins_install: the gateway's systemd drop-ins (gateway-dropins/*.conf), root-owned in
