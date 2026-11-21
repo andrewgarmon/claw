@@ -145,17 +145,9 @@ From now on, merged `infra/` changes install themselves within a few minutes (`c
 **Check:** `claw-status` shows the timer and a healthy gateway, and `systemctl list-timers claw-sync.timer claw-backup.timer claw-install-auto.timer` lists all three.
 
 ## 9. State backup (recommended)
-`claw-backup` snapshots the assistant's memory nightly to a private repo. **(human)** Create a private repo **`claw-state`**, ticking "Add a README" so it has a first commit. Then, on the laptop in your `claw` checkout:
-```bash
-git clone -q https://github.com/YOU/claw-state /tmp/claw-state
-git -C /tmp/claw-state bundle create "$PWD/workspace/private/claw-state-root.bundle" refs/remotes/origin/main
-sed -i "s/^ROOT_SHA=.*/ROOT_SHA=$(git -C /tmp/claw-state rev-parse origin/main)/" infra/claw-backup
-git -C workspace/private add -A && git -C workspace/private commit -qm "Root of my claw-state repo" && git -C workspace/private push
-git add infra workspace/private && git commit -qm "claw-backup: root of my claw-state repo" && git push
-```
-The auto-install picks it up within a few minutes. Until this is done, the nightly backup fails (visible in `journalctl -u claw-backup`).
+`claw-backup` snapshots the assistant's memory nightly to a private repo. **(human)** Create a private repo **`claw-state`** (empty is fine). gitbot's token (All repositories) already covers it. Until it exists, the nightly backup fails (visible in `journalctl -u claw-backup`).
 
-**Check:** `sudo systemctl start claw-backup && sudo journalctl -u claw-backup -n 20` shows a push and a PR link on `claw-state`. That PR is the backup: leave it open, never merge it.
+**Check:** `sudo systemctl start claw-backup && sudo journalctl -u claw-backup -n 20` shows a push and the link to the `agent/state/<hostname>` branch on `claw-state`. That branch is the backup: never delete it.
 
 ## 10. Optional extras
 - **Dead-man alerts:** create a healthchecks.io check (period 5 min, grace 10 min) and add `HEALTHCHECKS_PING_URL=…` to `~/.openclaw/.env`.

@@ -2,6 +2,7 @@
 # agent-git: the only path from agents on claw to GitHub writes.
 # Runs as gitbot via sudo. Agents never see the token.
 #   agent-git pr <repo> <branch> <title>              stdin: optional body, then the branch bundle
+#                                                     (a state backup is pushed only: no PR, prints the branch URL)
 #   agent-git issue <repo> <title> [labels]           stdin: body (optional); labels comma-separated, allowlisted
 #   agent-git issue-list <repo> [label] [state]       state open (default), closed or all; JSON
 #   agent-git issue-view <repo> <number>
@@ -20,7 +21,8 @@
 # Branches must be agent/* or claude/*. Never pushes main, never merges, never deletes.
 # State backups (agent/state/*) only go to the state repo, only from openclaw (claw-backup), and are
 # never force-pushed: a non-fast-forward update is refused, so a rebuilt or rewritten state-backup
-# can't replace the backup history. The state repo takes no other branches.
+# can't replace the backup history. They open no PR (the branch is the backup), so the branch needs
+# no history in common with the state repo's main. The state repo takes no other branches.
 # Issues: create, comment, label, close, reopen only. No delete, lock, transfer, or editing
 # existing titles, bodies or comments. Issue commands refuse pull request numbers.
 # Allowlisted labels missing on the target repo are created on first use (never edited).
@@ -298,6 +300,9 @@ case "$cmd" in
         fi
         die "push failed for $repo $branch"
       fi
+      log "PUSH $repo $branch $sha"
+      echo "$REMOTE_BASE/$repo/tree/$branch"
+      exit 0
     else
       # push only to the same agent branch on GitHub (force is fine: it's the agent's own branch)
       git -C "$work" "${GIT_AUTH[@]}" push -q "$REMOTE_BASE/$repo.git" "+$sha:refs/heads/$branch" \

@@ -11,8 +11,8 @@
 #   rest is still backed up and pushed, then the run fails so the owner hears about it.
 # - commits only when the state (or the key) changed: age output differs every run, so the check
 #   is a hash of the plaintext tar and the key, kept in the local state dir, never in the repo
-# - publishes through agent-git like any other agent push: branch agent/state/<host>,
-#   with one long-lived PR on claw-state that it keeps updating. Nothing needs merging.
+# - publishes through agent-git to branch agent/state/<host> on claw-state. agent-git pushes state
+#   branches without a PR, so the history starts from this repo's own first commit.
 # - every successful run, including "nothing new", touches ~/.cache/claw-backup/last-ok; claw-sync
 #   fails its health ping when that's over 26h old (a backup timer that stopped running)
 set -euo pipefail
@@ -49,18 +49,14 @@ grep -qE '^age1[0-9a-z]{58}$' "$AGE_RECIPIENTS" 2>/dev/null \
   || { echo "no age public key in $AGE_RECIPIENTS; nothing backed up (infra/README.md: state backup)" >&2; exit 1; }
 gd() { git -C "$1" -c user.name=Assistant -c user.email=assistant@claw.invalid -c core.hooksPath=/dev/null "${@:2}"; }
 g() { gd "$REPO" "$@"; }
-# claw-state's main is GitHub's "Initial commit". History must start from it or GitHub
-# refuses the PR ("no history in common"); openclaw can't read claw-state, so it ships here.
-ROOT_BUNDLE=$HOME/.openclaw/workspace/private/claw-state-root.bundle   # in the private submodule
-ROOT_SHA=13755bab789b4d562a9fc579c5edbce56491de8e
 if [ ! -d "$REPO/.git" ]; then
   # build in a scratch dir and move it into place, so a failed init is retried next run
   tmp=$REPO.new; rm -rf "$tmp"
   git init -q -b "$BRANCH" "$tmp"
-  gd "$tmp" fetch -q "$ROOT_BUNDLE" refs/remotes/origin/main
-  gd "$tmp" reset -q --hard "$ROOT_SHA"
   printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup: state.tar.gz.age, a gzipped tar encrypted with age (the private key is kept offline).\n' \
     "$host" "$host" "$WS" > "$tmp/README.md"
+  gd "$tmp" add README.md
+  gd "$tmp" commit -q -m "claw-state for $host"
   mv -T "$tmp" "$REPO"
 fi
 # the branch follows the current hostname, so after a move to a new name history continues there
@@ -124,9 +120,7 @@ head=$(g rev-parse HEAD)
 # a failed job export still pushes what was committed, then fails the run (and pings /fail)
 jobs_done() { [ -n "$jobs_ok" ] || { echo "scheduled jobs weren't exported (see above)" >&2; exit 1; }; }
 if [ "$BRANCH $head" = "$(cat "$STATE/pushed" 2>/dev/null)" ]; then echo "nothing new to push"; jobs_done; exit 0; fi
-# agent-git reads the PR body from stdin, followed by the bundle
-url=$({ printf '%s\n' "Nightly snapshot of USER.md, MEMORY.md, DREAMS.md and memory/ from $host, pushed by infra/claw-backup. The branch is the backup; this PR stays open and gets updated each night. No need to merge it."
-        g bundle create -q - "$BRANCH"; } | sudo -n -u gitbot /usr/local/bin/agent-git pr claw-state "$BRANCH" "State backup: $host")
+url=$(g bundle create -q - "$BRANCH" | sudo -n -u gitbot /usr/local/bin/agent-git pr claw-state "$BRANCH" "State backup: $host")
 echo "$BRANCH $head" > "$STATE/pushed"
 echo "pushed ${head:0:7} to $BRANCH: $url"
 jobs_done

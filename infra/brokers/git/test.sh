@@ -451,8 +451,8 @@ plain_pushed() { grep -qF "[$SHA1:refs/heads/$1]" "$H/git.log"; }
 
 stdin "$STATE_BUNDLE"
 SUDO_USER=openclaw run pr claw-state agent/state/claw "State backup: claw"
-check "state: openclaw fast-forward push goes through, without force" \
-  eval '[ $rc = 0 ] && plain_pushed agent/state/claw && ! force_pushed agent/state/claw && called "[pr][create]" && logged "PUSH claw-state agent/state/claw"'
+check "state: openclaw fast-forward push goes through, without force, and opens no PR" \
+  eval '[ $rc = 0 ] && plain_pushed agent/state/claw && ! force_pushed agent/state/claw && ! called "[pr]" && logged "PUSH claw-state agent/state/claw" && says "github.com/andrewgarmon/claw-state/tree/agent/state/claw"'
 
 touch "$H/push_reject"
 stdin "$STATE_BUNDLE"
