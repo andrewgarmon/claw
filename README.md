@@ -11,7 +11,7 @@ Config, rules and host plumbing for a personal AI assistant on [OpenClaw](https:
 - To change code or its own config, the assistant hands the work to **Claude Code** (user `coder`), which opens a PR.
 - PRs go through **`agent-git`** (user `gitbot`), the only holder of a GitHub write token. It pushes only `agent/*` and `claude/*` branches and never merges.
 - You review and merge on your phone. **`claw-sync`** deploys `main` within about a minute, validating first and rolling back if the gateway doesn't come up healthy.
-- Host plumbing (`infra/`) is installed by root from a fresh clone of `main` a few minutes after the merge (`claw-install --auto`), then the gateway is restarted if needed and the live wiring checked. `sudo claw-install` does the same by hand and shows the diff first.
+- Host plumbing (`infra/`) is installed by root from a fresh clone of `main` a few minutes after the merge (`claw-install --auto`), then deployed and the live wiring checked, and rolled back if either fails. `sudo claw-install` does the same by hand and shows the diff first.
 
 ## Layout
 - `openclaw.json`: OpenClaw config. Personal values come from `~/.openclaw/.env` via `${VAR}`.

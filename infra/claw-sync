@@ -5,7 +5,8 @@
 #   ~/.cache/claw-sync/removed/<time>/ (kept 30 days), not deleted, so a mistake can be undone. What counts as
 #   ignored comes only from the .gitignore committed at HEAD, so ignored state (.env, USER.md,
 #   memory/, state-backup/, ...) is left alone and a planted .gitignore can't hide anything.
-# - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
+# - restarts the gateway only if openclaw.json or infra/ changed (plugin code and drop-ins load only at
+#   start), then waits for it to report healthy. It's the only thing that restarts it on a deploy.
 # - invalid openclaw.json: not deployed (rolled back before any restart)
 # - gateway not healthy after a restart: rolls back to the last commit it was healthy on and restarts again
 # - either way the commit is marked bad and skipped until main moves, except: a known-good commit
@@ -232,7 +233,11 @@ validate() {
   printf '%s\n' "$out" | grep -v '^\[openclaw\] ' >&2
   return 1
 }
-restart() { systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2; }
+# daemon-reload first: claw-install may have changed the gateway's drop-ins
+restart() {
+  systemctl --user daemon-reload || echo "systemctl daemon-reload returned $?" >&2
+  systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2
+}
 # install_pending <commit>: it has infra/ changes past the installed commit. An unknown installed
 # commit doesn't hold a deploy back (infra_pending reports it).
 install_pending() {
@@ -354,7 +359,11 @@ while IFS= read -r f; do [ -z "$f" ] || ! protected "$f" || keep+="$f "; done <<
 cfg_before=$(cfg_hash)
 cfg_new=$(git show "$want:openclaw.json" | sha256sum | cut -d' ' -f1)
 # Mark the deploy pending before the tree changes, so a run killed during validate/restart is resumed.
-[ "$cfg_new" = "$cfg_before" ] || echo "$want" > "$STATE/pending"
+# infra/ (installed by claw-install, which this waits for above): plugin code, drop-ins, the OpenClaw
+# install. They load only at start, so a deploy across them restarts the gateway too.
+code=""
+git diff --quiet "$before" "$want" -- infra/ ':(exclude)infra/tests' ':(exclude)infra/*.md' || code=1
+[ "$cfg_new" = "$cfg_before" ] && [ -z "$code" ] || echo "$want" > "$STATE/pending"
 # assume-unchanged/skip-worktree hide edits from git diff and survive a reset: clear them first
 fl=$(flagged)
 if [ -n "$fl" ]; then
@@ -416,7 +425,7 @@ if [ -n "$left" ]; then
 fi
 echo "synced ${before:0:7} -> ${want:0:7}"
 
-if [ "$cfg_new" = "$cfg_before" ]; then
+if [ "$cfg_new" = "$cfg_before" ] && [ -z "$code" ]; then
   healthy "$IDLE_WAIT" || die "synced ${want:0:7} (no config change) but gateway not healthy"
   echo "$want" > "$STATE/good"
   ok "synced ${before:0:7} -> ${want:0:7}, gateway healthy"
@@ -429,5 +438,5 @@ if ! validate; then
 fi
 
 restart
-echo "openclaw.json changed: gateway restarted"
+if [ -n "$code" ]; then echo "infra/ changed: gateway restarted"; else echo "openclaw.json changed: gateway restarted"; fi
 finish_deploy "$want"
