@@ -113,24 +113,33 @@ sync_state() { oc timeout 10 head -c 40 "$OC_HOME/.cache/claw-sync/$1" 2>/dev/nu
 ocgit() { oc timeout 30 git -C "$OC_HOME/.openclaw" "$@" 2>/dev/null; }
 
 # wait_deployed <repo> <sha>: claw-sync deploys <sha> (or a later commit of main); it held the commit
-# back for this install. Returns 1 if main has moved on to a commit with infra/ changes of its own:
-# claw-sync holds that one back too, so it won't deploy <sha>, and the next install takes over.
+# back for this install. If main has moved on to a commit with infra/ changes of its own, claw-sync
+# holds that one back too and won't deploy <sha>: sets MOVED_ON (the next install takes over).
 wait_deployed() {
-  local r=$1 sha=$2 end=$((SECONDS + DEPLOY_WAIT)) good main
+  local r=$1 sha=$2 end=$((SECONDS + DEPLOY_WAIT)) good bad main seen=
   echo "waiting for claw-sync to deploy ${sha:0:7}"
   while :; do
     good=$(sync_state good)
     if [[ $good =~ ^[0-9a-f]{40}$ ]] && ocgit merge-base --is-ancestor "$sha" "$good"; then
       echo "claw-sync deployed ${good:0:7}"; return 0
     fi
-    [ "$(sync_state bad)" != "$sha" ] || die "claw-sync rejected ${sha:0:7}'s config and rolled back (its ping says why)"
+    bad=$(sync_state bad)
+    [ "$bad" != "$sha" ] || die "claw-sync rejected ${sha:0:7}'s config and rolled back (its ping says why)"
+    if [[ $bad =~ ^[0-9a-f]{40}$ ]] && ocgit merge-base --is-ancestor "$sha" "$bad"; then
+      die "claw-sync rejected ${bad:0:7}, merged after ${sha:0:7} (its ping says why); ${sha:0:7} itself installed"
+    fi
+    # claw-sync's origin/main is past <sha> with infra/ changes (checked once per commit it shows):
+    # confirm on GitHub, as root, before giving up the wait
     main=$(ocgit rev-parse -q --verify refs/remotes/origin/main) || main=
-    if [ -n "$main" ] && [ "$main" != "$sha" ] && ocgit merge-base --is-ancestor "$sha" "$main" \
-       && "${GIT[@]}" -C "$r" fetch -q origin main 2>/dev/null \
-       && main=$(git -C "$r" rev-parse FETCH_HEAD) && [ "$main" != "$sha" ] \
-       && git -C "$r" merge-base --is-ancestor "$sha" "$main" && ! git -C "$r" diff --quiet "$sha" "$main" -- infra/; then
-      echo "origin/main moved on to ${main:0:7}, which has infra/ changes of its own: claw-sync waits for that install"
-      return 1
+    if [ -n "$main" ] && [ "$main" != "$sha" ] && [ "$main" != "$seen" ]; then
+      seen=$main
+      if ocgit merge-base --is-ancestor "$sha" "$main" && ! ocgit diff --quiet "$sha" "$main" -- infra/ \
+         && timeout 120 "${GIT[@]}" -C "$r" fetch -q origin main 2>/dev/null && main=$(git -C "$r" rev-parse FETCH_HEAD) \
+         && [ "$main" != "$sha" ] && git -C "$r" merge-base --is-ancestor "$sha" "$main" \
+         && ! git -C "$r" diff --quiet "$sha" "$main" -- infra/; then
+        echo "origin/main moved on to ${main:0:7}, which has infra/ changes of its own: claw-sync waits for that install"
+        MOVED_ON=1; return 0
+      fi
     fi
     [ "$SECONDS" -lt "$end" ] || die "claw-sync hasn't deployed ${sha:0:7} in ${DEPLOY_WAIT}s"
     sleep "$POLL"
@@ -152,7 +161,8 @@ gateway_changes() {
 # Plugin code and drop-ins load only at start, so if they changed and the gateway hasn't restarted
 # since, restart it here.
 reload_gateway() {
-  wait_deployed "$1" "$2" || return 1
+  wait_deployed "$1" "$2"
+  [ -z "$MOVED_ON" ] || return 0
   if [ -n "$4" ] && [ "$(gw_pid || true)" = "$3" ]; then restart_gateway; fi
 }
 
@@ -194,7 +204,7 @@ confirm() {  # confirm <repo> <sha> <last>: show what changed in infra/, ask y/n
   done
 }
 
-WORK="" PAUSED="" ATTEMPT=""
+WORK="" PAUSED="" ATTEMPT="" MOVED_ON=""
 cleanup() {
   local rc=$?
   [ -z "$WORK" ] || rm -rf "$WORK"
@@ -235,7 +245,7 @@ main() {
     sha=$("${GIT[@]}" ls-remote "$REPO" refs/heads/main 2>/dev/null | cut -f1) || true
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "couldn't read origin/main (offline?); next run tries again"; exit 0; }
     [ "$sha" != "$failed" ] || die "${sha:0:7} failed to install or check (journalctl -u claw-install-auto); waiting for a new merge, or run: sudo claw-install"
-    [ "$sha" != "$last" ] || exit 0
+    [ "$sha" != "$last" ] || [ -e "$STATE/redo" ] || exit 0
   fi
 
   WORK=$(mktemp -d "$WORK_BASE/claw-install.XXXXXX")
@@ -254,9 +264,9 @@ main() {
   # after an attempt that didn't finish, last may be a commit whose restart or check never happened
   prev=$last; [ -z "$failed" ] && [ ! -e "$STATE/redo" ] || prev=
   changed=$(gateway_changes "$r" "$prev" "$sha")
-  pid=$(gw_pid || true)
   # claw-sync holds this commit back until record; paused, none of its deploys runs during the install
   sync_pause
+  pid=$(gw_pid || true)   # after any restart of claw-sync's that was in progress
 
   echo "running infra/install.sh from ${sha:0:7}"
   # the clone stays private (its dir is 700); installed files get the usual sudo umask. With claw-sync
@@ -279,7 +289,8 @@ main() {
   # trying it again: clear it, so claw-sync judges the config with everything installed
   [ "$(sync_state bad)" != "$sha" ] || oc rm -f "$OC_HOME/.cache/claw-sync/bad"
   sync_resume
-  if ! reload_gateway "$r" "$sha" "$pid" "$changed"; then
+  reload_gateway "$r" "$sha" "$pid" "$changed"
+  if [ -n "$MOVED_ON" ]; then
     touch "$STATE/redo"; ATTEMPT=""
     if [ "$AUTO" = 1 ]; then echo "the next run installs it, and redoes this one's restart and checks"
     else echo "run sudo claw-install again (or let the auto-install do it) to install it"; fi
