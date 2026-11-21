@@ -70,11 +70,12 @@ backup_stale() {
 }
 # planted_plugins: prints the plugin dirs nobody asked for: entries of ~/.openclaw/extensions other
 # than $GLOBAL_PLUGINS (an allowlisted or bundled id there counts too: it could shadow the real one),
-# and every entry of the workspace's .openclaw/extensions (nothing belongs there).
+# and every entry of a workspace's .openclaw/extensions (workspace/, workspace-reader/; nothing
+# belongs there).
 planted_plugins() {
   local d out=""
   for d in extensions/* extensions/.[!.]* extensions/..?* \
-           workspace/.openclaw/extensions/* workspace/.openclaw/extensions/.[!.]* workspace/.openclaw/extensions/..?*; do
+           workspace*/.openclaw/extensions/* workspace*/.openclaw/extensions/.[!.]* workspace*/.openclaw/extensions/..?*; do
     [ -e "$d" ] || [ -L "$d" ] || continue
     case $d in extensions/*) [[ " $GLOBAL_PLUGINS " == *" ${d#extensions/} "* ]] && continue ;; esac
     out+="$d "

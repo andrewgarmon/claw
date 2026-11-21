@@ -82,6 +82,8 @@ export class EventCache {
   }
 }
 
+// the only parameters a card-free question to the reader may carry (see sessions_send below)
+const READER_KEYS = new Set(["agentId", "message", "timeoutSeconds"]);
 const span = (p) => `${clean(p.start, 30)} → ${clean(p.end, 30)}${p.tz ? ` (${clean(p.tz, 40)})` : ""}`;
 const chars = (t) => `${String(t).length} chars`;
 
@@ -178,6 +180,11 @@ export function approvalFor(toolName, params, cache = new EventCache()) {
       }
       break;
     case "sessions_send": {
+      // the read-only reader agent is how the main agent researches; a question to it is not a
+      // hand-off (it can't write, message or spawn), so it needs no card. Exactly agentId "reader"
+      // with a message (and optionally timeoutSeconds), nothing else: a session key, a label or any
+      // selector a later OpenClaw adds (an ACP session above all) is gated.
+      if (p.agentId === "reader" && typeof p.message === "string" && Object.keys(p).every((k) => READER_KEYS.has(k))) return null;
       const head = `Send to ${clean(p.sessionKey || p.label || (p.agentId ? `agent ${p.agentId}` : "a session"), 80)} `;
       const n = room(head, 360);
       title = `Send to another session${long(p.message ?? "", n)}`;

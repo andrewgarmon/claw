@@ -415,7 +415,9 @@ run; check "anything in the workspace extensions dir (even an allowlisted id) an
   eval '[ $rc = 1 ] && pinged /fail "extensions/.hidden" && pinged /fail "workspace/.openclaw/extensions/duckduckgo"'
 rm -rf "$O/workspace/.openclaw" "$O/extensions/.hidden"; ln -s /tmp "$O/extensions/linked"; rm -f "$S/last-full"
 run; check "a symlink in an extensions dir: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/linked"'
-rm -f "$O/extensions/linked"; mkdir -p "$O/extensions/..x"; rm -f "$S/last-full"
+rm -f "$O/extensions/linked"; mkdir -p "$O/workspace-reader/.openclaw/extensions/x"; rm -f "$S/last-full"
+run; check "anything in the reader's workspace extensions dir: reported" eval '[ $rc = 1 ] && pinged /fail "workspace-reader/.openclaw/extensions/x"'
+rm -rf "$O/workspace-reader"; mkdir -p "$O/extensions/..x"; rm -f "$S/last-full"
 run; check "a name starting with two dots: reported" eval '[ $rc = 1 ] && pinged /fail "extensions/..x"'
 touch -d '27 hours ago' "$B"; rm -f "$S/last-full"
 run; check "planted plugin and stale backup at once: one ping names both" \

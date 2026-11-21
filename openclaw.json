@@ -1,5 +1,6 @@
 {
   "agents": {
+    "ownership": "explicit",
     "defaults": {
       "workspace": "/home/openclaw/.openclaw/workspace",
       "skipBootstrap": true,
@@ -16,17 +17,97 @@
       },
       "thinkingDefault": "medium",
       "heartbeat": {
-        "every": "0m"
+        "every": "0m",
+        "agentId": "main"
+      },
+      "systemAgent": {
+        "agentId": "main"
       }
     },
     "entries": {
       "main": {
         "name": "main",
         "workspace": "/home/openclaw/.openclaw/workspace",
-        "agentDir": "/home/openclaw/.openclaw/agents/main/agent"
+        "agentDir": "/home/openclaw/.openclaw/agents/main/agent",
+        "tools": {
+          "deny": [
+            "web_search",
+            "web_fetch",
+            "calendar_event_details",
+            "github_issue_view"
+          ],
+          "agentToAgent": {
+            "send": [
+              "reader"
+            ]
+          }
+        }
+      },
+      "reader": {
+        "name": "reader",
+        "workspace": "/home/openclaw/.openclaw/workspace-reader",
+        "agentDir": "/home/openclaw/.openclaw/agents/reader/agent",
+        "model": {
+          "primary": "google/gemini-3.8-flash@google:setup-101632ab-39a7-4fb0-b049-a2a4b78cb644",
+          "fallbacks": []
+        },
+        "thinkingDefault": "low",
+        "skills": [],
+        "subagents": {
+          "allowAgents": []
+        },
+        "tools": {
+          "profile": "minimal",
+          "alsoAllow": [
+            "web_search",
+            "web_fetch",
+            "calendar_list_calendars",
+            "calendar_events",
+            "calendar_event_details",
+            "github_issue_list",
+            "github_issue_view"
+          ],
+          "deny": [
+            "gateway",
+            "group:fs",
+            "group:runtime",
+            "group:memory",
+            "group:sessions",
+            "message",
+            "cron",
+            "skill_workshop",
+            "sessions_spawn",
+            "sessions_send",
+            "calendar_create",
+            "calendar_update",
+            "calendar_delete",
+            "calendar_undo",
+            "github_issue_create",
+            "github_issue_comment",
+            "github_issue_label",
+            "github_issue_close",
+            "github_issue_reopen",
+            "claude_usage"
+          ],
+          "fs": {
+            "workspaceOnly": true
+          },
+          "agentToAgent": {
+            "send": []
+          }
+        }
       }
     }
   },
+  "bindings": [
+    {
+      "agentId": "main",
+      "match": {
+        "channel": "telegram",
+        "accountId": "*"
+      }
+    }
+  ],
   "models": {
     "providers": {
       "google": {
@@ -286,6 +367,16 @@
         "provider": "duckduckgo",
         "enabled": true
       }
+    },
+    "agentToAgent": {
+      "enabled": true,
+      "allow": [
+        "main",
+        "reader"
+      ]
+    },
+    "sessions": {
+      "visibility": "agent"
     }
   },
   "skills": {

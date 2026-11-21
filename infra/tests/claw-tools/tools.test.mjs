@@ -206,7 +206,18 @@ test("manifest and openclaw.json agree with the tool list", () => {
   assert.equal(manifest.id, "claw-tools");
   assert.deepEqual(manifest.contracts.tools, names);
   const cfg = JSON.parse(fs.readFileSync(path.join(REPO, "openclaw.json"), "utf8"));
-  for (const n of names) assert.ok(cfg.tools.alsoAllow.includes(n), `tools.alsoAllow is missing ${n}`);
+  const readerOnly = TOOLS.filter((t) => t.readerOnly).map((t) => t.name);
+  for (const n of names.filter((x) => !readerOnly.includes(x))) assert.ok(cfg.tools.alsoAllow.includes(n), `tools.alsoAllow is missing ${n}`);
+  for (const n of readerOnly) {
+    assert.ok(!cfg.tools.alsoAllow.includes(n), `${n} is the reader's: not in the global tools.alsoAllow`);
+    assert.ok(cfg.agents.entries.reader.tools.alsoAllow.includes(n), `the reader agent should allow ${n}`);
+    assert.ok(cfg.agents.entries.main.tools.deny.includes(n), `the main agent should deny ${n}`);
+  }
+  // every write tool, now and later, is denied to the reader (approvals.plugin only covers main, so
+  // a write reaching the reader would get no card): derived from the tool list, not a copy of it
+  for (const t of TOOLS.filter((x) => x.write)) {
+    assert.ok(cfg.agents.entries.reader.tools.deny.includes(t.name), `the reader agent must deny the write tool ${t.name}`);
+  }
   for (const d of ["group:runtime", "gateway", "skill_workshop", "cron"]) assert.ok(cfg.tools.deny.includes(d), `tools.deny is missing ${d}`);
   assert.equal(cfg.tools.fs?.workspaceOnly, true);
   assert.equal(new Set(names).size, names.length);

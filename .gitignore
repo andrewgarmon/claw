@@ -10,6 +10,10 @@
 !/workspace/*.md
 !/workspace/skills/
 !/workspace/local/
+# the reader agent's workspace: only its rules are tracked (it has no memory)
+!/workspace-reader/
+/workspace-reader/*
+!/workspace-reader/AGENTS.md
 # public skills (shared with the upstream repo; see AGENTS.md "Skills: private by default")
 !/skills/
 

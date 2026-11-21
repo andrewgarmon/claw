@@ -156,6 +156,20 @@ test("sessions_send is gated: an approved Claude Code session can't get new task
   assert.match(approvalFor("sessions_send", { agentId: "x", message: "m" }).description, /^Send to agent x /);
 });
 
+test("sessions_send to the reader agent needs no card; anything that only looks like it does", () => {
+  assert.equal(approvalFor("sessions_send", { agentId: "reader", message: "what's on today?" }), null);
+  assert.ok(approvalFor("sessions_send", { agentId: "reader", sessionKey: "agent:main:acp:abc", message: "m" }));
+  assert.ok(approvalFor("sessions_send", { agentId: "reader", label: "x", message: "m" }));
+  assert.ok(approvalFor("sessions_send", { agentId: "Reader", message: "m" }));
+  assert.ok(approvalFor("sessions_send", { sessionKey: "agent:reader:main", message: "m" }));
+  // only agentId, message and timeoutSeconds: any other key (a selector OpenClaw may add) gets a card
+  assert.equal(approvalFor("sessions_send", { agentId: "reader", message: "m", timeoutSeconds: 0 }), null);
+  for (const extra of [{ sessionId: "acp-1" }, { key: "agent:main:acp:abc" }, { target: "x" }, { mode: "steer" }, { sessionKey: undefined }])
+    assert.ok(approvalFor("sessions_send", { agentId: "reader", message: "m", ...extra }), JSON.stringify(Object.keys(extra)));
+  assert.ok(approvalFor("sessions_send", { agentId: "reader" }));
+  assert.ok(approvalFor("sessions_send", { agentId: "reader", message: { text: "m" } }));
+});
+
 test("message: an unlisted destination-like key is blocked; the tool's other 2026.11.3 keys pass", () => {
   for (const k of ["chat", "user", "username", "destination", "channelIds", "roomId", "conversationId", "email", "phone", "cc", "spaceId", "dmId"])
     assert.ok(messageBlock({ action: "send", message: "hi", [k]: "someone" }, "12345"), k);
