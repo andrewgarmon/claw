@@ -10,9 +10,11 @@ concurrency:
 jobs:
   review:
     # Same-repo, non-draft PRs only: fork PRs never get the secret, so skip them instead of failing.
+    # Dependabot's PRs don't get it either (a bump's diff is a version and a SHA; CI still runs).
     # The install's private repo can use a copy of this file.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -21,10 +23,14 @@ jobs:
       pull-requests: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
+        env:
+          # the commands the reviewer runs (gh pr comment, ...) don't see the action's tokens: the PR it
+          # reviews may be the agent's, written to make it run something
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Actions logs on a public repo are public: only show the transcript on private repos

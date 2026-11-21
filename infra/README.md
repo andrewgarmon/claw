@@ -34,7 +34,7 @@
 - `timers`: `claw-sync.timer` and `claw-backup.timer` are enabled, active and have a next run.
 - `gateway`: `~/.openclaw` is at `origin/main` (as of claw-sync's last fetch) and `openclaw gateway health` answers.
 - `plugins`: OpenClaw's plugin registry (`openclaw plugins list --json --enabled`, as openclaw) has only ids from `plugins.allow` enabled, none from the workspace extensions dir, and each root-owned plugin enabled from its dir under `/usr/local/lib/claw/openclaw-plugins/`. A plugin `openclaw.json` loads from there that isn't installed (no npm, or `npm ci` failed during `claw-install`) fails too, so an older copy elsewhere can't quietly stand in. Prints plugin ids only.
-- `tools`: the deployed `openclaw.json` denies `group:runtime`, `gateway`, `cron` and `skill_workshop`, has `tools.fs.workspaceOnly: true`, and allows every tool the installed claw-tools plugin declares. Skipped until claw-tools is installed.
+- `tools`: the deployed `openclaw.json` denies `group:runtime`, `gateway` and `skill_workshop`, has `tools.fs.workspaceOnly: true`, and allows every tool the installed claw-tools plugin declares. Skipped until claw-tools is installed.
 - `agent-cal`: one read-only `calendars` call, skipped if the broker or its secret isn't there.
 
 It only reads, or makes calls that are refused before the network: it never pushes, messages Telegram, creates events or calls a model, and it never prints command output, only its own reasons.

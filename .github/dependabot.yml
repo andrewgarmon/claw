@@ -1,0 +1,13 @@
+# Version bumps as PRs: the pinned GitHub Actions (by commit SHA) and the npm lockfiles that
+# claw-install installs root-owned. Weekly, grouped, so it's one PR per ecosystem and folder.
+# Merging one is the same as any infra change: CI, review, then the install picks it up.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups: { actions: { patterns: ["*"] } }
+  - package-ecosystem: npm
+    directories: [/infra/acp, /infra/openclaw-plugins/duckduckgo]
+    schedule: { interval: weekly }
+    groups: { npm: { patterns: ["*"] } }
