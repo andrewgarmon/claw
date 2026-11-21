@@ -381,6 +381,11 @@
   },
   "skills": {
     "allowBundled": [],
+    "load": {
+      "extraDirs": [
+        "/home/openclaw/.openclaw/workspace/private/skills"
+      ]
+    },
     "entries": {
       "add-model-provider": {
         "enabled": false
@@ -435,7 +440,7 @@
         "bootstrap-extra-files": {
           "enabled": true,
           "paths": [
-            "local/AGENTS.md"
+            "private/AGENTS.md"
           ]
         }
       }

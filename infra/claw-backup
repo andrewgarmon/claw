@@ -4,7 +4,7 @@
 # - packs USER.md, MEMORY.md, DREAMS.md and memory/** from the workspace into one tar, encrypts it
 #   with age to the public key in $AGE_RECIPIENTS (root-owned; the private key stays off the host)
 #   and commits only the ciphertext, state.tar.gz.age, to a local git repo (~/.openclaw/state-backup,
-#   ignored by claw-config, left alone by claw-sync). Without a key it fails (and fail-pings)
+#   ignored by the deployed repo, left alone by claw-sync). Without a key it fails (and fail-pings)
 #   rather than back up plaintext.
 # - commits only when the state (or the key) changed: age output differs every run, so the check
 #   is a hash of the plaintext tar and the key, kept in the local state dir, never in the repo
@@ -48,7 +48,7 @@ gd() { git -C "$1" -c user.name=Assistant -c user.email=assistant@claw.invalid -
 g() { gd "$REPO" "$@"; }
 # claw-state's main is GitHub's "Initial commit". History must start from it or GitHub
 # refuses the PR ("no history in common"); openclaw can't read claw-state, so it ships here.
-ROOT_BUNDLE=$HOME/.openclaw/infra/claw-state-root.bundle
+ROOT_BUNDLE=$HOME/.openclaw/workspace/private/claw-state-root.bundle   # in the private submodule
 ROOT_SHA=13755bab789b4d562a9fc579c5edbce56491de8e
 if [ ! -d "$REPO/.git" ]; then
   # build in a scratch dir and move it into place, so a failed init is retried next run
@@ -56,7 +56,7 @@ if [ ! -d "$REPO/.git" ]; then
   git init -q -b "$BRANCH" "$tmp"
   gd "$tmp" fetch -q "$ROOT_BUNDLE" refs/remotes/origin/main
   gd "$tmp" reset -q --hard "$ROOT_SHA"
-  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup in claw-config: state.tar.gz.age, a gzipped tar encrypted with age (the private key is kept offline).\n' \
+  printf '# claw-state (%s)\n\nNightly snapshot of the assistant'"'"'s agent-owned state from %s:%s, written by infra/claw-backup: state.tar.gz.age, a gzipped tar encrypted with age (the private key is kept offline).\n' \
     "$host" "$host" "$WS" > "$tmp/README.md"
   mv -T "$tmp" "$REPO"
 fi
@@ -98,7 +98,7 @@ fi
 head=$(g rev-parse HEAD)
 if [ "$BRANCH $head" = "$(cat "$STATE/pushed" 2>/dev/null)" ]; then echo "nothing new to push"; exit 0; fi
 # agent-git reads the PR body from stdin, followed by the bundle
-url=$({ printf '%s\n' "Nightly snapshot of USER.md, MEMORY.md, DREAMS.md and memory/ from $host, pushed by infra/claw-backup (claw-config). The branch is the backup; this PR stays open and gets updated each night. No need to merge it."
+url=$({ printf '%s\n' "Nightly snapshot of USER.md, MEMORY.md, DREAMS.md and memory/ from $host, pushed by infra/claw-backup. The branch is the backup; this PR stays open and gets updated each night. No need to merge it."
         g bundle create -q - "$BRANCH"; } | sudo -n -u gitbot /usr/local/bin/agent-git pr claw-state "$BRANCH" "State backup: $host")
 echo "$BRANCH $head" > "$STATE/pushed"
 echo "pushed ${head:0:7} to $BRANCH: $url"

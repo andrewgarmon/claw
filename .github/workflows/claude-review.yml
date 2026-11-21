@@ -9,13 +9,11 @@ concurrency:
 
 jobs:
   review:
-    # Shared with the private config repos (they get it through upstream sync). Same-repo, non-draft
-    # PRs only: fork PRs never get the secret, so skip them instead of failing. Skip upstream-sync/*
-    # PRs: those changes were already reviewed here, and the sync bot isn't an allowed actor anyway.
+    # Same-repo, non-draft PRs only: fork PRs never get the secret, so skip them instead of failing.
+    # The install's private repo can use a copy of this file.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
-      !github.event.pull_request.draft &&
-      !startsWith(github.event.pull_request.head.ref, 'upstream-sync/')
+      !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -36,8 +34,9 @@ jobs:
             PR NUMBER: ${{ github.event.pull_request.number }}
 
             Review this pull request. The PR branch is checked out in the working directory.
-            Context: this repo is part of a personal AI agent setup (OpenClaw) on a Linux server: either the public
-            upstream or a private config repo that syncs from it. Merges to the config repo's main deploy automatically.
+            Context: this repo is part of a personal AI agent setup (OpenClaw) on a Linux server: either the public repo
+            the server deploys (merges to main deploy automatically) or the install's private repo, mounted in it as a
+            pinned submodule at workspace/private (a change there deploys once the public repo's pointer is bumped).
             This repo is ${{ github.event.repository.visibility }}.
             Users: the admin user (sudo), openclaw (runs the agent), coder (runs Claude Code), gitbot (only holder of
             the GitHub write token).
