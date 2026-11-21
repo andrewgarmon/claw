@@ -18,8 +18,10 @@ sed -e "s|^export PATH=.*|export PATH=$BIN:/usr/bin:/bin|" \
     -e "s|^STATE=.*|STATE=$T/state|" \
     -e "s|^WORK_BASE=.*|WORK_BASE=$T/work|" \
     -e "s|^SELF=.*|SELF=$T/sbin/claw-install|" \
-    -e "s|^SMOKE=.*|SMOKE=$T/claw-smoke|" "$INFRA/claw-install" > "$CI"
-[ "$(grep -c "$T" "$CI")" = 8 ] || { echo "FAIL could not point claw-install at the test dir (did its constants change?)"; exit 1; }
+    -e "s|^SMOKE=.*|SMOKE=$T/claw-smoke|" \
+    -e "s|^OC_HOME=.*|OC_HOME=$T/oc|" -e "s|^POLL=.*|POLL=0|" -e "s|^HEALTH_WAIT=.*|HEALTH_WAIT=0|" \
+    -e "s|^DEPLOY_WAIT=.*|DEPLOY_WAIT=0|" "$INFRA/claw-install" > "$CI"
+[ "$(grep -c "$T" "$CI")" = 9 ] || { echo "FAIL could not point claw-install at the test dir (did its constants change?)"; exit 1; }
 
 # fake id: root unless $T/not_root; any other query (e.g. `id openclaw`) fails
 cat > "$BIN/id" <<EOF
@@ -39,6 +41,28 @@ cat > "$BIN/git" <<EOF
 printf '[%s]' "\$@" >> "$T/git.log"; echo >> "$T/git.log"
 exec /usr/bin/git "\$@"
 EOF
+# fake sudo -u openclaw: runs the command here, keeping the fakes on PATH. Reading claw-sync's good
+# file while $T/sync_restarts exists also restarts the gateway (as claw-sync's deploy would).
+cat > "$BIN/sudo" <<EOF
+#!/bin/bash
+while [ "\${1:0:1}" = - ]; do [ "\$1" = -u ] && shift; shift; done
+a=(); for x in "\$@"; do case \$x in PATH=*) a+=("PATH=$BIN:/usr/bin:/bin") ;; *) a+=("\$x") ;; esac; done
+[ "\${a[-2]:-}" = cat ] && [ "\${a[-1]##*/}" = good ] && [ -e "$T/sync_restarts" ] && echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid"
+exec "\${a[@]}"
+EOF
+# fake systemctl: logs each call; the gateway's MainPID changes on restart
+cat > "$BIN/systemctl" <<EOF
+#!/bin/bash
+echo "\$*" >> "$T/systemctl.log"
+case "\$*" in
+  "--user show -p MainPID --value openclaw-gateway") cat "$T/gwpid" ;;
+  "--user restart openclaw-gateway") echo \$((\$(cat "$T/gwpid") + 1)) > "$T/gwpid" ;;
+  "show -p ActiveState --value claw-sync.service") echo inactive ;;
+esac
+exit 0
+EOF
+printf '#!/bin/bash\n[ "$1 $2" = "gateway health" ] && [ ! -e "%s/unhealthy" ]\n' "$T" > "$BIN/openclaw"
+echo 100 > "$T/gwpid"
 chmod +x "$BIN"/*
 
 # origin with infra/install.sh (records where it ran from and which version it is)
@@ -61,8 +85,13 @@ sha1=$(git -C "$T/dev" rev-parse HEAD)
 git clone -q "$T/origin.git" "$T/openclaw-checkout"
 echo 'echo EVIL >> '"$T/installed" >> "$T/openclaw-checkout/infra/install.sh"
 
+# openclaw's checkout (only for "is this deployed commit past that one") and claw-sync's state
+git clone -q "$T/origin.git" "$T/oc/.openclaw"; mkdir -p "$T/oc/.cache/claw-sync"
+
 fails=0
-run() { : > "$T/git.log"; bash "$CI" "$@" < /dev/null > "$T/out" 2>&1; rc=$?; }
+run() { : > "$T/git.log"; : > "$T/systemctl.log"; bash "$CI" "$@" < /dev/null > "$T/out" 2>&1; rc=$?; }
+restarts() { [ "$(grep -c "^--user restart openclaw-gateway$" "$T/systemctl.log")" = "$1" ]; }
+paused_around_restart() { [ "$(grep -n -m1 "^stop claw-sync.timer$" "$T/systemctl.log" | cut -d: -f1)" -lt "$(grep -n -m1 "restart openclaw-gateway" "$T/systemctl.log" | cut -d: -f1)" ] && [ "$(tail -n1 "$T/systemctl.log")" = "start claw-sync.timer" ]; }
 check() {  # check <name> <condition...>
   local name=$1; shift
   if "$@"; then echo "ok   $name"; else echo "FAIL $name"; sed 's/^/     out: /' "$T/out"; fails=$((fails + 1)); fi
@@ -80,6 +109,7 @@ check "records the installed commit, readable by claw-sync (644)" eval '[ "$(las
 check "deletes the clone afterwards" work_empty
 check "installs itself from the clone" eval 'cmp -s "$T/sbin/claw-install" "$INFRA/claw-install" && says "updated $T/sbin/claw-install"'
 check "first install lists infra/" eval 'says "no previous install recorded" && says "infra/install.sh"'
+check "first install restarts the gateway once, claw-sync paused around it" eval 'restarts 1 && paused_around_restart && says "gateway healthy"'
 check "no claw-smoke installed: skipped quietly" eval '! says "claw-smoke"'
 check "token reaches git only through the env, never argv or output" \
   eval 'grep -q "\[clone\]" "$T/git.log" && ! grep -q "$TOKEN" "$T/git.log" "$T/out"'
@@ -150,15 +180,87 @@ run -y
 check "malformed token: refused before cloning" eval '[ $rc = 1 ] && says "look like a GitHub token" && [ ! -s "$T/git.log" ]'
 
 rm "$T/coder.env"; printf 'GH_TOKEN=%s\n' "$TOKEN" > "$T/elsewhere"; ln -s "$T/elsewhere" "$T/coder.env"
-run -y
-check "token file that is a symlink is ignored (no terminal: refused)" eval '[ $rc = 1 ] && says "no token in" && [ ! -s "$T/git.log" ]'
+GH_TOKEN=leaked run -y
+check "token file that is a symlink is ignored: clones without a token" eval '[ $rc = 0 ] && grep -q "\[clone\]" "$T/git.log"'
 rm "$T/coder.env"
 run -y
-check "missing token and no terminal: refused" eval '[ $rc = 1 ] && says "no token in" && [ ! -s "$T/git.log" ]'
+check "no token file: clones without one (the repo is public)" eval '[ $rc = 0 ] && grep -q "\[clone\]" "$T/git.log"'
 printf 'GH_TOKEN=%s\n' "$TOKEN" > "$T/coder.env"
 
 run --force
 check "unknown option: usage" eval '[ $rc = 1 ] && says "usage:"'
+
+# ---------- --auto (the timer) ----------
+push() { git -C "$T/dev" add -A && git -C "$T/dev" commit -qm "$1" && git -C "$T/dev" push -q origin main 2>/dev/null; git -C "$T/dev" rev-parse HEAD; }
+deployed() { git -C "$T/oc/.openclaw" fetch -q origin main 2>/dev/null; echo "$1" > "$T/oc/.cache/claw-sync/good"; }
+failed() { [ "$(cat "$T/state/failed" 2>/dev/null)" = "$1" ]; }
+printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"; chmod +x "$T/claw-smoke"
+run -y; : > "$T/installed"; base=$(last)
+run --auto
+check "auto, main unchanged: only asks GitHub for main's commit, no clone, no output" \
+  eval '[ $rc = 0 ] && grep -q "\[ls-remote\]" "$T/git.log" && ! grep -q "\[clone\]" "$T/git.log" && [ ! -s "$T/out" ]'
+echo docs > "$T/dev/README.md"; a1=$(push "docs only")
+run --auto
+check "auto, nothing in infra/ changed: marker moved, nothing installed or restarted" \
+  eval '[ $rc = 0 ] && [ "$(last)" = "$a1" ] && [ ! -s "$T/installed" ] && restarts 0'
+mkdir -p "$T/dev/infra/openclaw-plugins/p"; echo 1 > "$T/dev/infra/openclaw-plugins/p/index.js"; a2=$(push "plugin p")
+run --auto
+check "auto, plugin code changed: installed without asking, one restart (claw-sync paused), smoke passes" \
+  eval '[ $rc = 0 ] && [ "$(last)" = "$a2" ] && grep -q " $a2$" "$T/installed" && restarts 1 && paused_around_restart && says "smoke test passed"'
+echo 2 > "$T/dev/infra/openclaw-plugins/p/index.js"; echo '{"v":2}' > "$T/dev/openclaw.json"; a3=$(push "plugin p + config")
+deployed "$a3"; touch "$T/sync_restarts"
+run --auto
+check "auto, plugin + config: claw-sync's deploy restarts the gateway, so no second restart" \
+  eval '[ $rc = 0 ] && says "claw-sync deployed ${a3:0:7}" && restarts 0 && says "smoke test passed"'
+rm "$T/sync_restarts"
+echo 3 > "$T/dev/infra/openclaw-plugins/p/index.js"; echo '{"v":3}' > "$T/dev/openclaw.json"; a4=$(push "plugin p + same-as-running config")
+deployed "$a4"
+run --auto
+check "auto, plugin + config but claw-sync didn't restart (config unchanged on the host): restarts once" \
+  eval '[ $rc = 0 ] && says "claw-sync deployed" && restarts 1'
+mkdir -p "$T/dev/infra/gateway-dropins"; echo x > "$T/dev/infra/gateway-dropins/heap.conf"; a5=$(push "drop-in")
+run --auto
+check "auto, drop-in changed: daemon-reload as openclaw, then one restart" \
+  eval '[ $rc = 0 ] && grep -q "^--user daemon-reload$" "$T/systemctl.log" && restarts 1'
+echo 4 > "$T/dev/infra/openclaw-plugins/p/index.js"; echo '{"v":4}' > "$T/dev/openclaw.json"; a6=$(push "config claw-sync rejects")
+echo "$a6" > "$T/oc/.cache/claw-sync/bad"
+run --auto
+check "auto, claw-sync rejects the config: fails, says so, commit marked failed (install itself recorded)" \
+  eval '[ $rc = 1 ] && says "claw-sync rejected ${a6:0:7}" && failed "$a6" && [ "$(last)" = "$a6" ] && restarts 0'
+run --auto
+check "auto, same failed commit: fails again at once (check stays down), no clone" \
+  eval '[ $rc = 1 ] && says "failed to install or check" && ! grep -q "\[clone\]" "$T/git.log"'
+rm "$T/oc/.cache/claw-sync/bad"
+run -y
+check "a manual install that succeeds clears it" eval '[ $rc = 0 ] && [ ! -e "$T/state/failed" ]'
+run --auto
+check "... and the auto-install is quiet again" eval '[ $rc = 0 ] && [ ! -s "$T/out" ]'
+echo 5 > "$T/dev/infra/openclaw-plugins/p/index.js"; a7=$(push "plugin that breaks the gateway"); touch "$T/unhealthy"
+run --auto
+check "auto, gateway unhealthy after the restart: fails, claw-sync's timer started again, marked failed" \
+  eval '[ $rc = 1 ] && says "gateway not healthy" && [ "$(tail -n1 "$T/systemctl.log")" = "start claw-sync.timer" ] && failed "$a7"'
+rm "$T/unhealthy"
+echo 6 > "$T/dev/infra/openclaw-plugins/p/index.js"; a8=$(push "smoke breaks")
+printf '#!/bin/bash\necho "FAIL fake-check"\nexit 1\n' > "$T/claw-smoke"
+run --auto
+check "auto, smoke test fails: fails, marked failed" eval '[ $rc = 1 ] && says "smoke test FAILED" && failed "$a8"'
+printf '#!/bin/bash\necho "PASS fake-check"\n' > "$T/claw-smoke"
+touch "$T/install_fails"; echo 7 > "$T/dev/infra/openclaw-plugins/p/index.js"; a9=$(push "install fails")
+run --auto
+check "auto, install.sh fails: nothing recorded, marked failed, no restart" eval '[ $rc = 1 ] && [ "$(last)" = "$a8" ] && failed "$a9" && restarts 0'
+rm "$T/install_fails"
+echo 8 > "$T/dev/infra/openclaw-plugins/p/index.js"; a10=$(push "fixed")
+run --auto
+check "auto, a new merge after a failure is tried" eval '[ $rc = 0 ] && [ "$(last)" = "$a10" ] && [ ! -e "$T/state/failed" ]'
+echo 9 > "$T/dev/infra/openclaw-plugins/p/index.js"; a11=$(push "while locked")
+flock "$T/state/lock" sleep 3 & sleep 0.5
+run --auto
+check "auto while another claw-install runs: exits quietly, nothing done" eval '[ $rc = 0 ] && [ ! -s "$T/git.log" ] && [ "$(last)" = "$a10" ]'
+wait
+mv "$T/origin.git" "$T/origin.away"
+run --auto
+check "auto, GitHub unreachable: exit 0 (claw-sync reports fetch failures), next run tries again" eval '[ $rc = 0 ] && says "offline"'
+mv "$T/origin.away" "$T/origin.git"
 
 # ---------- install.sh's own guard ----------
 # copy the real install.sh into an other-writable dir; with id faking root it must refuse

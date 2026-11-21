@@ -1,0 +1,10 @@
+[Unit]
+Description=Check origin/main for infra/ changes to install every 2 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

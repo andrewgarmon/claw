@@ -11,7 +11,7 @@ Config, rules and host plumbing for a personal AI assistant on [OpenClaw](https:
 - To change code or its own config, the assistant hands the work to **Claude Code** (user `coder`), which opens a PR.
 - PRs go through **`agent-git`** (user `gitbot`), the only holder of a GitHub write token. It pushes only `agent/*` and `claude/*` branches and never merges.
 - You review and merge on your phone. **`claw-sync`** deploys `main` within about a minute, validating first and rolling back if the gateway doesn't come up healthy.
-- Host plumbing (`infra/`) is never auto-deployed. The admin user applies it with `sudo claw-install`, which shows the diff first.
+- Host plumbing (`infra/`) is installed by root from a fresh clone of `main` a few minutes after the merge (`claw-install --auto`), then the gateway is restarted if needed and the live wiring checked. `sudo claw-install` does the same by hand and shows the diff first.
 
 ## Layout
 - `openclaw.json`: OpenClaw config. Personal values come from `~/.openclaw/.env` via `${VAR}`.
@@ -29,6 +29,6 @@ This repo is what the host deploys: claw-sync makes `~/.openclaw` match main wit
 - **Untrusted text goes to a reader.** Web pages, calendar notes and issue bodies are read by a second agent with read-only tools; the main agent only sees its summary.
 - **Writes wait for you.** Calendar changes, GitHub issue writes and hand-offs to Claude Code show you what's about to happen in Telegram and run only after you tap Approve.
 - **Plugins are allowlisted.** Only plugin ids listed in `openclaw.json` load. Plugins this repo ships are installed root-owned and loaded from that path, so a plugin dropped into an extensions folder can't load or replace them.
-- **Root plumbing is human-applied** from a root-owned clone (`claw-install`), never from the agent-writable checkout.
+- **Root plumbing comes only from `main` on GitHub**, installed from a root-owned clone (`claw-install`), never from the agent-writable checkout. Your merge is the gate.
 - **Public repos are guarded.** `agent-git` takes writes to them from Claude Code only, after a redaction-list check and gitleaks.
 - **Agent state stays out of git.** `USER.md`, `MEMORY.md`, `memory/` and `DREAMS.md` live on the host and are backed up nightly to a private repo. CI fails if they're ever tracked.

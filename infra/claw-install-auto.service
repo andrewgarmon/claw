@@ -1,0 +1,12 @@
+[Unit]
+Description=Install infra/ from origin/main when it changed (claw-install --auto)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/claw-install --auto
+# success or failure to its own healthchecks check, from a root-only URL file (optional)
+ExecStopPost=/usr/local/lib/claw/unit-ping %n /etc/claw/install.url
+# install + claw-sync's deploy (up to 20 min) + a gateway restart (5) + claw-smoke
+TimeoutStartSec=45min
