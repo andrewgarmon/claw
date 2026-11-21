@@ -121,7 +121,7 @@ sudo -u openclaw XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) systemctl --user re
 **Check:** DM your bot "hi" and get a reply (the first reply can take a minute after a restart).
 
 ## 8. Host plumbing: `claw-install`
-**(human)** Create a **fine-grained token** for Claude Code on GitHub → Settings → Developer settings → Fine-grained tokens: All repositories, **read-only** Contents, Issues and Pull requests. The first install asks for it.
+**(human)** Create a **fine-grained token** for Claude Code on GitHub → Settings → Developer settings → Fine-grained tokens: All repositories, **read-only** Contents, Issues and Pull requests. It's stored for coder below (claw-install uses it too if it's there).
 
 Install `claw-install` from a fresh clone, then run it. Your repo's [`infra/README.md`](infra/README.md) has this snippet with your username filled in, under "Applying infra" → "First time on a host":
 ```bash
@@ -131,7 +131,7 @@ sudo bash -c '
   install -m 755 -o root -g root "$d/r/infra/claw-install" /usr/local/sbin/claw-install'
 sudo claw-install
 ```
-It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the deploy and backup timers and the gateway drop-ins, then prints a **TODO** for each missing secret. Work through them (exact commands are in `infra/README.md` → Secrets):
+It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the deploy, backup and auto-install timers and the gateway drop-ins, then prints a **TODO** for each missing secret. Work through them (exact commands are in `infra/README.md` → Secrets):
 - **coder's token** (the read-only one above): `sudo -H -u coder bash -c 'umask 077; read -rsp "Token: " T && printf "GH_TOKEN=%s\n" "$T" > ~/.config/coder.env'`, then let git use it: `sudo -H -u coder git -C /home/coder config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`
 - **Claude Code** as coder **(human, to log in)**: `sudo -iu coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude'`
 - **gitbot's token (human)**: a second fine-grained token, All repositories, read/write for **Contents, Issues, Pull requests**, nothing else (not Administration, Workflows, Actions or Secrets). New repos are yours to create on github.com; "All repositories" covers them. Store it with: `sudo -H -u gitbot bash -c 'umask 077; read -rsp "Token: " T && printf "%s\n" "$T" > ~/.config/gh-token'`
@@ -140,7 +140,9 @@ It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the d
 
 Run `sudo claw-install` again after the secrets are in. It's safe to re-run.
 
-**Check:** `claw-status` shows the timer and a healthy gateway, and `systemctl list-timers claw-sync.timer claw-backup.timer` lists both.
+From now on, merged `infra/` changes install themselves within a few minutes (`claw-install-auto.timer`; infra/README.md → Applying infra, including its optional healthchecks.io check).
+
+**Check:** `claw-status` shows the timer and a healthy gateway, and `systemctl list-timers claw-sync.timer claw-backup.timer claw-install-auto.timer` lists all three.
 
 ## 9. State backup (recommended)
 `claw-backup` snapshots the assistant's memory nightly to a private repo. **(human)** Create a private repo **`claw-state`**, ticking "Add a README" so it has a first commit. Then, on the laptop in your `claw` checkout:
@@ -151,7 +153,7 @@ sed -i "s/^ROOT_SHA=.*/ROOT_SHA=$(git -C /tmp/claw-state rev-parse origin/main)/
 git -C workspace/private add -A && git -C workspace/private commit -qm "Root of my claw-state repo" && git -C workspace/private push
 git add infra workspace/private && git commit -qm "claw-backup: root of my claw-state repo" && git push
 ```
-Then `sudo claw-install` on the host. Until this is done, the nightly backup fails (visible in `journalctl -u claw-backup`).
+The auto-install picks it up within a few minutes. Until this is done, the nightly backup fails (visible in `journalctl -u claw-backup`).
 
 **Check:** `sudo systemctl start claw-backup && sudo journalctl -u claw-backup -n 20` shows a push and a PR link on `claw-state`. That PR is the backup: leave it open, never merge it.
 

@@ -5,7 +5,8 @@
 #   ~/.cache/claw-sync/removed/<time>/ (kept 30 days), not deleted, so a mistake can be undone. What counts as
 #   ignored comes only from the .gitignore committed at HEAD, so ignored state (.env, USER.md,
 #   memory/, state-backup/, ...) is left alone and a planted .gitignore can't hide anything.
-# - restarts the gateway only if openclaw.json changed, then waits for it to report healthy
+# - restarts the gateway only if openclaw.json or infra/ changed (plugin code and drop-ins load only at
+#   start), then waits for it to report healthy. It's the only thing that restarts it on a deploy.
 # - invalid openclaw.json: not deployed (rolled back before any restart)
 # - gateway not healthy after a restart: rolls back to the last commit it was healthy on and restarts again
 # - either way the commit is marked bad and skipped until main moves, except: a known-good commit
@@ -26,15 +27,18 @@
 # - the timer fires every minute so merges deploy fast, but an idle run (HEAD == origin/main, no drift,
 #   no pending deploy, main not marked bad) exits quietly after the fetch if the last successful full run
 #   was under $FULL_EVERY seconds ago. So health checks and pings still happen about every 5 minutes.
-# - a full run with a healthy gateway also checks whether origin/main has infra/ commits newer than the one
-#   claw-install last installed (that's manual, on purpose): it writes $STATE/infra-pending and tells
-#   the owner once on Telegram. Never a /fail: it isn't an outage.
+# - a commit whose infra/ changes claw-install hasn't installed yet isn't deployed: its config may need
+#   plugin code that isn't there (it would fail validation and be marked bad). claw-install --auto (root
+#   timer) installs it within minutes; until then this stays on the current commit, healthy.
+# - a full run with a healthy gateway also writes $STATE/infra-pending while infra/ commits are merged
+#   but not installed, and tells the owner once on Telegram if that lasts $INFRA_NOTIFY_AFTER seconds
+#   (the auto-install is stuck or off). Never a /fail: it isn't an outage.
 set -eEuo pipefail
 export HOME=${CLAW_SYNC_HOME:-/home/openclaw}   # override only for tests
 export PATH=$HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
 XDG_RUNTIME_DIR=/run/user/$(id -u); export XDG_RUNTIME_DIR
 STATE=$HOME/.cache/claw-sync; mkdir -p "$STATE"
-HEALTH_WAIT=${CLAW_SYNC_HEALTH_WAIT:-180}       # seconds to wait for the gateway after a restart
+HEALTH_WAIT=${CLAW_SYNC_HEALTH_WAIT:-300}       # seconds to wait for the gateway after a restart (~2 min here)
 IDLE_WAIT=${CLAW_SYNC_IDLE_WAIT:-60}            # ... when nothing was restarted (e.g. still booting)
 FULL_EVERY=${CLAW_SYNC_FULL_EVERY:-300}         # seconds between health checks + pings while idle
 FETCH_FAIL_RUNS=${CLAW_SYNC_FETCH_FAIL_RUNS:-15} # consecutive fetch failures before /fail (runs are 1 min apart)
@@ -42,6 +46,7 @@ BACKUP_OK=$HOME/.cache/claw-backup/last-ok      # touched by claw-backup on ever
 BACKUP_MAX_AGE=${CLAW_SYNC_BACKUP_MAX_AGE:-93600}  # 26h: nightly at ~03:30, plus jitter and slack
 GLOBAL_PLUGINS="acpx duckduckgo"   # the only plugins expected in ~/.openclaw/extensions (claw-smoke has the same list)
 INSTALLED=${CLAW_SYNC_INSTALLED:-/var/lib/claw-install/last}  # claw-install's last commit (root-owned, 644)
+INFRA_NOTIFY_AFTER=${CLAW_SYNC_INFRA_NOTIFY_AFTER:-1200}  # tell the owner once infra/ waits this long
 SUB=workspace/private                           # the install's private repo, a pinned submodule
 REMOVED=$STATE/removed                          # untracked files are moved here, not deleted
 REMOVED_DAYS=${CLAW_SYNC_REMOVED_DAYS:-30}      # ... and kept this long
@@ -86,27 +91,30 @@ planted_plugins() {
 }
 # infra_pending: write $STATE/infra-pending (installed commit, origin/main, the infra/ commit subjects)
 # when origin/main has infra/ changes claw-install hasn't installed, else remove it, and send the owner
-# one Telegram message per new infra/ commit: merges that don't touch infra/ don't repeat it (one
-# message in all while the installed commit is unknown).
+# one Telegram message per new infra/ commit once it's $INFRA_NOTIFY_AFTER seconds old: merges that don't
+# touch infra/ don't repeat it (one message in all while the installed commit is unknown).
 # Runs at the start of ok(), i.e. on every full run whose gateway is healthy (even one that then fails
 # its ping for a bad main or a stale backup; the message goes through the gateway). Any failure here is logged
 # and ignored: the run's result never depends on it.
 infra_pending() {
-  local inst="" key subjects owner msg
+  local inst="" key subjects owner msg young=""
   [ -n "$target" ] || return 0   # the resume-a-pending-deploy path reaches ok() before the fetch
   [ -r "$INSTALLED" ] && inst=$(head -c 40 "$INSTALLED")
   if [[ $inst =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$inst" "$target" 2>/dev/null; then
     subjects=$(git log --format='%h %s' "$inst..$target" -- infra/ | head -n 20 | LC_ALL=C tr -d '\000-\010\013-\037\177')
     [ -n "$subjects" ] || { rm -f "$STATE/infra-pending"; return 0; }
     key=$(git log -1 --format=%H "$inst..$target" -- infra/)   # newest pending infra/ commit
+    # committed (merged) recently: the auto-install is probably on it, so don't message yet
+    [ $(( $(date +%s) - $(git log -1 --format=%ct "$key") )) -ge "$INFRA_NOTIFY_AFTER" ] || young=1
     msg="infra changes are merged but not installed on $(hostname):
 $subjects
-Run: sudo claw-install"
+Check: sudo journalctl -u claw-install-auto -n 30. Or run: sudo claw-install"
   else
     inst=unknown key=unknown subjects="(can't tell what's installed: no readable $INSTALLED on origin/main's history)"
     msg="claw-sync on $(hostname) can't tell which infra/ commit is installed. Run sudo claw-install once to record it."
   fi
   printf 'installed %s\norigin/main %s\n%s\n' "$inst" "$target" "$subjects" > "$STATE/infra-pending"
+  [ -z "$young" ] || return 0
   [ "$(cat "$STATE/infra-notified" 2>/dev/null)" != "$key" ] || return 0
   [ -r .env ] && owner=$(sed -n 's/^TELEGRAM_ALLOW_FROM=//p' .env | tail -n1 | tr -d "\"' \r")
   [[ ${owner:-} =~ ^[0-9]{1,20}$ ]] || { echo "infra changes pending; no TELEGRAM_ALLOW_FROM to tell" >&2; return 0; }
@@ -225,7 +233,19 @@ validate() {
   printf '%s\n' "$out" | grep -v '^\[openclaw\] ' >&2
   return 1
 }
-restart() { systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2; }
+# daemon-reload first: claw-install may have changed the gateway's drop-ins
+restart() {
+  systemctl --user daemon-reload || echo "systemctl daemon-reload returned $?" >&2
+  systemctl --user restart openclaw-gateway || echo "systemctl restart returned $?" >&2
+}
+# install_pending <commit>: it has infra/ changes past the installed commit. An unknown installed
+# commit doesn't hold a deploy back (infra_pending reports it).
+install_pending() {
+  local inst=""
+  [ -r "$INSTALLED" ] && inst=$(head -c 40 "$INSTALLED")
+  [[ $inst =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$inst" "$1" 2>/dev/null \
+    && ! git diff --quiet "$inst" "$1" -- infra/
+}
 
 # The state dir is writable by openclaw (the agent's user), so only trust commits that are on main:
 # otherwise a forged good/pending would make claw-sync reset onto an unreviewed local commit.
@@ -306,6 +326,11 @@ if [ "$target" = "$bad" ]; then
   [ -n "$want" ] || die "origin/main ${target:0:7} is marked bad and there is no known-good commit on main"
 fi
 
+if [ "$want" != "$before" ] && install_pending "$want"; then
+  echo "waiting for claw-install: ${want:0:7} has infra/ changes that aren't installed; staying on ${before:0:7}"
+  want=$before
+fi
+
 # Idle and checked recently: exit quietly, no health check and no ping. last-full is agent-writable, but
 # this path needs HEAD == origin/main with no drift, so a forged value can never skip a deploy or a
 # drift revert. A future, garbage or stale value means a full run. Rewriting it every minute would only
@@ -334,7 +359,11 @@ while IFS= read -r f; do [ -z "$f" ] || ! protected "$f" || keep+="$f "; done <<
 cfg_before=$(cfg_hash)
 cfg_new=$(git show "$want:openclaw.json" | sha256sum | cut -d' ' -f1)
 # Mark the deploy pending before the tree changes, so a run killed during validate/restart is resumed.
-[ "$cfg_new" = "$cfg_before" ] || echo "$want" > "$STATE/pending"
+# infra/ (installed by claw-install, which this waits for above): plugin code, drop-ins, the OpenClaw
+# install. They load only at start, so a deploy across them restarts the gateway too.
+code=""
+git diff --quiet "$before" "$want" -- infra/ ':(exclude)infra/tests' ':(exclude)infra/*.md' || code=1
+[ "$cfg_new" = "$cfg_before" ] && [ -z "$code" ] || echo "$want" > "$STATE/pending"
 # assume-unchanged/skip-worktree hide edits from git diff and survive a reset: clear them first
 fl=$(flagged)
 if [ -n "$fl" ]; then
@@ -396,7 +425,7 @@ if [ -n "$left" ]; then
 fi
 echo "synced ${before:0:7} -> ${want:0:7}"
 
-if [ "$cfg_new" = "$cfg_before" ]; then
+if [ "$cfg_new" = "$cfg_before" ] && [ -z "$code" ]; then
   healthy "$IDLE_WAIT" || die "synced ${want:0:7} (no config change) but gateway not healthy"
   echo "$want" > "$STATE/good"
   ok "synced ${before:0:7} -> ${want:0:7}, gateway healthy"
@@ -409,5 +438,5 @@ if ! validate; then
 fi
 
 restart
-echo "openclaw.json changed: gateway restarted"
+if [ -n "$code" ]; then echo "infra/ changed: gateway restarted"; else echo "openclaw.json changed: gateway restarted"; fi
 finish_deploy "$want"
