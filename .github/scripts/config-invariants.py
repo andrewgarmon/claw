@@ -17,6 +17,9 @@ EQUAL = {
     "skills.workshop.autonomous.mode": "off",
     "skills.allowBundled": [],
     "agents.defaults.heartbeat.every": "0m",
+    # cron jobs: timed reminders and agent turns only; no trigger scripts, script payloads or stream
+    # schedules (command payloads need operator.admin, which the agent doesn't have)
+    "cron.triggers.enabled": False,
     "acp.allowedAgents": ["claude"],
     "acp.defaultAgent": "claude",
     "plugins.entries.acpx.config.agents": {"claude": {"command": "sudo", "args": ["-n", "-u", "coder", "/usr/local/bin/coder-acp"]}},
@@ -24,7 +27,7 @@ EQUAL = {
     "agents.entries.reader.tools.agentToAgent.send": [],
 }
 CONTAINS = {
-    "tools.deny": ["group:runtime", "gateway", "cron", "skill_workshop", "plugins", "secrets",
+    "tools.deny": ["group:runtime", "gateway", "skill_workshop", "plugins", "secrets",
                    "conversations_list", "conversations_send", "conversations_turn"],
     "agents.entries.main.tools.deny": ["web_search", "web_fetch", "calendar_event_details", "github_issue_view"],
     "agents.entries.reader.tools.deny": ["group:fs", "group:runtime", "group:memory", "group:sessions", "message",

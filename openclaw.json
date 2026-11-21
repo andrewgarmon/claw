@@ -318,6 +318,11 @@
       "mode": "off"
     }
   },
+  "cron": {
+    "triggers": {
+      "enabled": false
+    }
+  },
   "tools": {
     "profile": "coding",
     "alsoAllow": [
