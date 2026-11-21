@@ -306,6 +306,12 @@
     "enabled": false,
     "consentedAt": "2026-11-11T02:42:33.109Z"
   },
+  "update": {
+    "checkOnStart": false,
+    "auto": {
+      "enabled": false
+    }
+  },
   "gateway": {
     "mode": "local",
     "port": 18789,
@@ -381,6 +387,11 @@
   },
   "skills": {
     "allowBundled": [],
+    "load": {
+      "extraDirs": [
+        "/home/openclaw/.openclaw/workspace/private/skills"
+      ]
+    },
     "entries": {
       "add-model-provider": {
         "enabled": false
@@ -435,7 +446,7 @@
         "bootstrap-extra-files": {
           "enabled": true,
           "paths": [
-            "local/AGENTS.md"
+            "private/AGENTS.md"
           ]
         }
       }

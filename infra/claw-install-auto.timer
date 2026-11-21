@@ -1,0 +1,12 @@
+[Unit]
+Description=Check origin/main for infra/ changes to install every 2 minutes
+
+[Timer]
+# 5 min after the timer starts: at boot, and when install.sh first enables it (from a claw-install
+# that may not take the lock yet), so the two never install at once
+OnActiveSec=5min
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

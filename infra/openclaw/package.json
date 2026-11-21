@@ -1,0 +1,8 @@
+{
+  "name": "claw-openclaw-version",
+  "private": true,
+  "description": "The OpenClaw version this setup runs. claw-install updates the host to it (openclaw update --tag, as openclaw); CI validates openclaw.json against it; Dependabot proposes bumps. Not installed from here.",
+  "dependencies": {
+    "openclaw": "2026.11.3"
+  }
+}

@@ -13,23 +13,24 @@ Time: about two hours. Cost: a host (a 4 GB VPS is about $24/month, or $0 on har
 - A **Claude** subscription, for Claude Code to do coding work (optional, but the PR loop is half the point).
 - Optional: a [healthchecks.io](https://healthchecks.io) account (dead-man alerts), an iCloud calendar (`agent-cal`).
 
-## 1. Make your private config repo (human or agent, on a laptop)
-Your copy is private and holds your personal files. This repo stays a public reference you can pull from.
+## 1. Make your two repos (human or agent, on a laptop)
+Your **fork** of this repo is public and is what the host deploys. Your personal files (persona, this install's rules, private skills) go in a separate **private repo**, mounted in the fork as a pinned submodule at `workspace/private`. `private.example/` shows what goes in it.
 
+**(human)** Fork this repo on GitHub, and create an empty **private** repo, e.g. `claw-private`. Then:
 ```bash
-git clone https://github.com/andrewgarmon/claw claw-config && cd claw-config
-rm -rf .git && git init -q -b main
+git clone https://github.com/YOU/claw && cd claw
 grep -rlI andrewgarmon . | xargs sed -i 's/andrewgarmon/YOU/g'          # GitHub owner in scripts and docs
-cp workspace/local/AGENTS.md.example workspace/local/AGENTS.md          # fill it in now or later
 infra/tests/run-all.sh | tail -3                                         # ends with "all passed"
+cp -r private.example /tmp/private && git -C /tmp/private init -q -b main # fill in AGENTS.md now or later
+git -C /tmp/private add -A && git -C /tmp/private commit -qm "Initial private files"
+git -C /tmp/private remote add origin git@github.com:YOU/claw-private.git && git -C /tmp/private push -u origin main
+git submodule set-url workspace/private https://github.com/YOU/claw-private.git
+git submodule update --init --remote workspace/private
+git add -A && git commit -qm "My private repo" && git push
 ```
-Name the repo **`claw-config`** (the rules and scripts assume that name). Create it on GitHub as **private**, then push:
-```bash
-git add -A && git commit -qm "Initial config" && git remote add origin git@github.com:YOU/claw-config.git && git push -u origin main
-```
-Optional: the issue-label allowlist (`ISSUE_LABELS` in `infra/brokers/git/agent-git`). The assistant's name and emoji come from `workspace/IDENTITY.md`, which OpenClaw creates on first run and you keep private.
+Optional: the issue-label allowlist (`ISSUE_LABELS` in `infra/brokers/git/agent-git`). The assistant's name and emoji come from `IDENTITY.md` in your private repo.
 
-**Check:** the private repo shows your files on GitHub, and `grep -rI andrewgarmon .` finds nothing.
+**Check:** `git submodule status` shows your private repo's commit, and `grep -rI andrewgarmon .` finds nothing.
 
 ## 2. Get a host
 Any of these, running **Ubuntu 24.04** with **at least 4 GB of RAM** (with 2 GB the gateway runs out of memory and replies take 30+ seconds):
@@ -94,17 +95,19 @@ The second command prints your auth profile ids, e.g. `google:setup-1a2b…`. In
 **Check:** `.env` has an `OPENCLAW_GATEWAY_TOKEN=` line that isn't `null`, and your repo's `openclaw.json` names your profile id.
 
 ## 6. Make `~/.openclaw` a checkout of your repo
-`openclaw` gets a **read-only** deploy key, so the assistant can pull but never push:
+`openclaw` fetches your fork over HTTPS, and your private repo with a **read-only** deploy key, so the assistant can pull but never push:
 ```bash
-sudo -iu openclaw bash -c 'ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "openclaw@claw (read-only deploy key)" && cat ~/.ssh/id_ed25519.pub'
+sudo -iu openclaw bash -c 'ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/claw_private -C "openclaw@claw (read-only deploy key)" && cat ~/.ssh/claw_private.pub'
 ```
-**(human)** In your repo → Settings → Deploy keys → Add deploy key, paste the key, and leave **Allow write access unticked**. Then:
+**(human)** In your private repo → Settings → Deploy keys → Add deploy key, paste the key, and leave **Allow write access unticked**. Then:
 ```bash
-sudo -iu openclaw bash -c 'ssh-keyscan -q github.com >> ~/.ssh/known_hosts && cd ~/.openclaw && git init -q -b main && git remote add origin git@github.com:YOU/claw-config.git && git fetch -q origin main && git checkout -f -B main origin/main && git status --short'
+sudo -iu openclaw bash -c 'printf "Host github-claw-private\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/claw_private\n  IdentitiesOnly yes\n" >> ~/.ssh/config && ssh-keyscan -q github.com >> ~/.ssh/known_hosts'
+sudo -iu openclaw git config --global url.git@github-claw-private:YOU/claw-private.git.insteadOf https://github.com/YOU/claw-private.git
+sudo -iu openclaw bash -c 'cd ~/.openclaw && git init -q -b main && git remote add origin https://github.com/YOU/claw.git && git fetch -q origin main && git checkout -f -B main origin/main && git submodule update --init && git status --short'
 ```
-Tracked files now come from your repo. Everything else (`.env`, credentials, sessions, the starter `USER.md`) stays on disk, untracked. OpenClaw's starter `SOUL.md` and `IDENTITY.md` show up as untracked: copy them into `workspace/` in your repo, commit and push before step 8. From then on `claw-sync` removes untracked files in the checkout every run (ignored state like `.env` and `USER.md` stays), so anything untracked is deleted. A starter `BOOTSTRAP.md` isn't used by this setup and is removed too. `openclaw.json` sets `agents.defaults.skipBootstrap: true`, so once your config is deployed OpenClaw stops re-creating starter files that are missing.
+Tracked files now come from your repos. Everything else (`.env`, credentials, sessions, the starter `USER.md`) stays on disk, untracked. OpenClaw's starter `SOUL.md`, `IDENTITY.md` and `BOOTSTRAP.md` aren't used: yours come from the private repo. From now on `claw-sync` removes untracked files in the checkout every run (ignored state like `.env` and `USER.md` stays). `openclaw.json` sets `agents.defaults.skipBootstrap: true`, so once your config is deployed OpenClaw stops re-creating starter files.
 
-**Check:** `sudo -iu openclaw git -C ~/.openclaw log --oneline -1` shows your latest commit.
+**Check:** `sudo -iu openclaw git -C ~/.openclaw log --oneline -1` shows your latest commit, and `sudo -iu openclaw ls ~/.openclaw/workspace/private` shows your private files.
 
 ## 7. Telegram
 **(human)** In Telegram, message **@BotFather**, send `/newbot` and copy the token. Message **@userinfobot** to get your numeric user ID. Then:
@@ -118,19 +121,17 @@ sudo -u openclaw XDG_RUNTIME_DIR=/run/user/$(id -u openclaw) systemctl --user re
 **Check:** DM your bot "hi" and get a reply (the first reply can take a minute after a restart).
 
 ## 8. Host plumbing: `claw-install`
-**(human)** Create a **fine-grained token** for Claude Code on GitHub → Settings → Developer settings → Fine-grained tokens: All repositories, **read-only** Contents, Issues and Pull requests. The first install asks for it.
+**(human)** Create a **fine-grained token** for Claude Code on GitHub → Settings → Developer settings → Fine-grained tokens: All repositories, **read-only** Contents, Issues and Pull requests. It's stored for coder below (claw-install uses it too if it's there).
 
 Install `claw-install` from a fresh clone, then run it. Your repo's [`infra/README.md`](infra/README.md) has this snippet with your username filled in, under "Applying infra" → "First time on a host":
 ```bash
 sudo bash -c '
   set -e; umask 077; d=$(mktemp -d); trap "rm -rf $d" EXIT
-  read -rsp "Read-only GitHub token for claw-config: " T; echo
-  GH_TOKEN=$T git -c credential.helper= -c "credential.helper=!f() { echo username=x-access-token; echo password=\$GH_TOKEN; }; f" \
-    clone -q --depth 1 https://github.com/YOU/claw-config.git "$d/r"
+  git clone -q --depth 1 https://github.com/YOU/claw.git "$d/r"
   install -m 755 -o root -g root "$d/r/infra/claw-install" /usr/local/sbin/claw-install'
 sudo claw-install
 ```
-It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the deploy and backup timers and the gateway drop-ins, then prints a **TODO** for each missing secret. Work through them (exact commands are in `infra/README.md` → Secrets):
+It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the deploy, backup and auto-install timers and the gateway drop-ins, then prints a **TODO** for each missing secret. Work through them (exact commands are in `infra/README.md` → Secrets):
 - **coder's token** (the read-only one above): `sudo -H -u coder bash -c 'umask 077; read -rsp "Token: " T && printf "GH_TOKEN=%s\n" "$T" > ~/.config/coder.env'`, then let git use it: `sudo -H -u coder git -C /home/coder config --global credential.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`
 - **Claude Code** as coder **(human, to log in)**: `sudo -iu coder bash -c 'curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude'`
 - **gitbot's token (human)**: a second fine-grained token, All repositories, read/write for **Contents, Issues, Pull requests**, nothing else (not Administration, Workflows, Actions or Secrets). New repos are yours to create on github.com; "All repositories" covers them. Store it with: `sudo -H -u gitbot bash -c 'umask 077; read -rsp "Token: " T && printf "%s\n" "$T" > ~/.config/gh-token'`
@@ -139,29 +140,32 @@ It creates the `coder`, `gitbot` and `calbot` users, installs the brokers, the d
 
 Run `sudo claw-install` again after the secrets are in. It's safe to re-run.
 
-**Check:** `claw-status` shows the timer and a healthy gateway, and `systemctl list-timers claw-sync.timer claw-backup.timer` lists both.
+From now on, merged `infra/` changes install themselves within a few minutes (`claw-install-auto.timer`; infra/README.md → Applying infra, including its optional healthchecks.io check).
+
+**Check:** `claw-status` shows the timer and a healthy gateway, and `systemctl list-timers claw-sync.timer claw-backup.timer claw-install-auto.timer` lists all three.
 
 ## 9. State backup (recommended)
-`claw-backup` snapshots the assistant's memory nightly to a private repo. **(human)** Create a private repo **`claw-state`**, ticking "Add a README" so it has a first commit. Then, on the laptop in your `claw-config` checkout:
+`claw-backup` snapshots the assistant's memory nightly to a private repo. **(human)** Create a private repo **`claw-state`**, ticking "Add a README" so it has a first commit. Then, on the laptop in your `claw` checkout:
 ```bash
 git clone -q https://github.com/YOU/claw-state /tmp/claw-state
-git -C /tmp/claw-state bundle create "$PWD/infra/claw-state-root.bundle" refs/remotes/origin/main
+git -C /tmp/claw-state bundle create "$PWD/workspace/private/claw-state-root.bundle" refs/remotes/origin/main
 sed -i "s/^ROOT_SHA=.*/ROOT_SHA=$(git -C /tmp/claw-state rev-parse origin/main)/" infra/claw-backup
-git add infra && git commit -qm "claw-backup: root of my claw-state repo" && git push
+git -C workspace/private add -A && git -C workspace/private commit -qm "Root of my claw-state repo" && git -C workspace/private push
+git add infra workspace/private && git commit -qm "claw-backup: root of my claw-state repo" && git push
 ```
-Then `sudo claw-install` on the host. Until this is done, the nightly backup fails (visible in `journalctl -u claw-backup`).
+The auto-install picks it up within a few minutes. Until this is done, the nightly backup fails (visible in `journalctl -u claw-backup`).
 
 **Check:** `sudo systemctl start claw-backup && sudo journalctl -u claw-backup -n 20` shows a push and a PR link on `claw-state`. That PR is the backup: leave it open, never merge it.
 
 ## 10. Optional extras
 - **Dead-man alerts:** create a healthchecks.io check (period 5 min, grace 10 min) and add `HEALTHCHECKS_PING_URL=…` to `~/.openclaw/.env`.
-- **Claude reviews of PRs:** install the Claude GitHub App on `claw-config` and add a review workflow.
-- **Public repo of your own:** `agent-git`'s public-repo checks need a redaction list first (`infra/README.md` → Public repos).
+- **Claude reviews of PRs:** install the Claude GitHub App on both repos (`.github/workflows/claude-review.yml` is here; copy it into the private repo too).
+- **Redaction list (needed: your fork is public):** `agent-git` refuses writes to public repos until it has one (`infra/README.md` → Public repos).
 
 ## 11. The end-to-end test
-1. DM the bot: "file a test issue on claw-config, then close it". An issue appears through `gitbot`.
+1. DM the bot: "file a test issue on claw-private, then close it". An issue appears through `gitbot`.
 2. DM the bot: "have Claude Code add a line to the README saying hello, and open a PR". A `claude/*` PR appears.
 3. Merge it on your phone. Within about a minute `claw-sync` deploys it (`journalctl -u claw-sync --since -10min`).
-4. Ask the bot something only your `local/AGENTS.md` says, e.g. "when does your briefing run?"
+4. Ask the bot something only your private `AGENTS.md` says, e.g. "when does your briefing run?"
 
 If all four work, the loop is complete. From here, change the assistant by asking it (or Claude Code) for a PR and merging it.
