@@ -1,0 +1,10 @@
+[Unit]
+Description=Hand claude-ready issues to Claude Code when weekly Claude usage would go unused (backlog-worker.json)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+ExecStart=/usr/local/bin/claw-backlog
+TimeoutStartSec=1h

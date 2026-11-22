@@ -1,0 +1,21 @@
+{
+  "_comment": "Rules for claw-backlog, which hands claude-ready issues to Claude Code when weekly Claude usage would otherwise go unused. Change any value in a PR; it applies on the next hourly check after the merge. infra/README.md (Backlog worker) explains each one.",
+  "enabled": true,
+  "when": {
+    "localHours": [9, 21],
+    "hoursBeforeWeeklyReset": 24,
+    "minHoursBetweenRuns": 4
+  },
+  "usage": {
+    "weeklyBelowPercent": 70,
+    "sessionBelowPercent": 50
+  },
+  "pick": {
+    "repos": ["claw"],
+    "label": "claude-ready",
+    "skipLabels": ["human-effort:high"],
+    "preferLabels": ["value:high", "value:med", "value:low"],
+    "maxIssuesPerRun": 2,
+    "maxIssuesPerWeek": 4
+  }
+}

@@ -63,13 +63,15 @@ command -v age >/dev/null || apt-get install -y age     # claw-backup encrypts s
 # fails the install before anything else changes below)
 . lib/backup-key.sh
 backup_key_install ../backup.age.pub || exit 1
-install -m 755 -o root -g root claw-sync claw-backup /usr/local/bin/
+install -m 755 -o root -g root claw-sync claw-backup claw-backlog /usr/local/bin/
 install -m 755 -o root -g root status.sh /usr/local/bin/claw-status
 install -m 755 -o root -g root smoke.sh /usr/local/bin/claw-smoke
 # claw-sync alerts when claw-backup's last-ok is over 26h old; a new host gets 26h before the first
 # nightly run. Created as openclaw: root never writes under a service user's home.
 (cd / && sudo -u openclaw sh -c '[ -e "$1/last-ok" ] || { mkdir -p "$1" && touch "$1/last-ok"; }' _ /home/openclaw/.cache/claw-backup)
 install -m 644 -o root -g root claw-sync.service claw-sync.timer claw-backup.service claw-backup.timer /etc/systemd/system/
+# backlog worker: hourly check, rules in backlog-worker.json at the repo root (infra/README.md)
+install -m 644 -o root -g root claw-backlog.service claw-backlog.timer /etc/systemd/system/
 # auto-install: claw-install --auto every 2 min (claw-install updates /usr/local/sbin/claw-install itself)
 install -m 644 -o root -g root claw-install-auto.service claw-install-auto.timer /etc/systemd/system/
 # claw-sync (as openclaw) reads the installed commit to say when an install is pending. claw-install
@@ -116,7 +118,7 @@ sudo -H -u coder git -C /home/coder config --global user.email claude@claw.inval
 gateway_dropins_install
 
 systemctl daemon-reload
-systemctl enable --now claw-sync.timer claw-backup.timer claw-denywatch.timer
+systemctl enable --now claw-sync.timer claw-backup.timer claw-denywatch.timer claw-backlog.timer
 # installs by hand only (sudo claw-install) while /etc/claw/manual-install exists
 if [ -e /etc/claw/manual-install ]; then
   systemctl disable --now claw-install-auto.timer 2>/dev/null || true

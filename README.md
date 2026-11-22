@@ -15,6 +15,7 @@ Config, rules and host plumbing for a personal AI assistant on [OpenClaw](https:
 
 ## Layout
 - `openclaw.json`: OpenClaw config. Personal values come from `~/.openclaw/.env` via `${VAR}`.
+- `backlog-worker.json`: when spare weekly Claude usage goes to `claude-ready` issues (see [`infra/README.md`](infra/README.md#backlog-worker)).
 - `workspace/AGENTS.md`: the agent's operating rules.
 - `workspace/private/`: the install's private repo, a pinned submodule (persona, install-specific rules, private skills). `private.example/` shows its layout.
 - `skills/`: shared skills.

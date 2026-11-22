@@ -1,0 +1,230 @@
+#!/usr/bin/python3 -I
+"""claw-backlog: spend spare weekly Claude usage on the backlog before the week resets.
+
+Runs as openclaw from a root-owned systemd timer (hourly). Every rule lives in backlog-worker.json
+at the deployed repo's root (next to openclaw.json; the agent's file tools can't reach it), so
+changing when it runs, the usage limits or what it picks up is a PR to that file, live about a
+minute after the merge. This script never changes; it only reads that file.
+
+Each run checks, cheapest first, and stops quietly at the first "no":
+  enabled -> inside the allowed local hours -> long enough since the last hand-off ->
+  Claude usage readable (claude-usage, as coder) and under both limits -> the weekly reset close
+  enough -> under the weekly cap -> issues with the label, minus skipped and recently handed ones.
+Then it starts one agent turn in the main session (the owner's DM) naming the picked issues by repo
+and number only (titles are untrusted text and never reach the prompt). The agent hands each to
+Claude Code (sessions_spawn: one Approve tap each) and sends the PR links.
+
+No model call unless it hands something off. Usage it can't read (exit 3: no plan limits) means do
+nothing. Each run logs one line saying what it decided (journalctl -u claw-backlog).
+  claw-backlog              the timer's run
+  claw-backlog --dry-run    say what it would do, start nothing, change no state
+Exit 0 when it ran or decided not to; 1 on a bad config or a failed call (the unit shows failed).
+"""
+import datetime as dt
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+HOME = "/home/openclaw"
+CONFIG = HOME + "/.openclaw/backlog-worker.json"
+STATE_DIR = HOME + "/.cache/claw-backlog"
+PATH = HOME + "/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
+CLAUDE_USAGE = "/usr/local/bin/claude-usage"
+AGENT_GIT = "/usr/local/bin/agent-git"
+RETRY_DAYS = 14        # an issue handed off isn't picked again for this long (a denied tap included)
+AGENT_TIMEOUT = 3000   # seconds for the agent turn (each hand-off's approval waits up to 10 min)
+
+KEYS = {
+    "enabled": bool,
+    "when": {"localHours": list, "hoursBeforeWeeklyReset": (int, float), "minHoursBetweenRuns": (int, float)},
+    "usage": {"weeklyBelowPercent": (int, float), "sessionBelowPercent": (int, float)},
+    "pick": {"repos": list, "label": str, "skipLabels": list, "preferLabels": list,
+             "maxIssuesPerRun": int, "maxIssuesPerWeek": int},
+}
+
+
+def say(msg):
+    print(msg, flush=True)
+
+
+def fail(msg):
+    print(f"claw-backlog: {msg}", file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+def load_config(path):
+    """The config, checked against KEYS: every key present with the right type, nothing extra."""
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError) as e:
+        fail(f"can't read {path}: {e}")
+
+    def check(obj, spec, where):
+        if not isinstance(obj, dict):
+            fail(f"{where or 'config'} must be an object")
+        extra = set(obj) - set(spec) - {"_comment"}
+        if extra:
+            fail(f"unknown key(s) in {where or 'config'}: {', '.join(sorted(extra))}")
+        for k, t in spec.items():
+            name = f"{where}.{k}" if where else k
+            if k not in obj:
+                fail(f"missing {name}")
+            if isinstance(t, dict):
+                check(obj[k], t, name)
+            elif not isinstance(obj[k], t) or (t is not bool and isinstance(obj[k], bool)):
+                fail(f"{name} has the wrong type")
+    check(cfg, KEYS, "")
+    w, u, p = cfg["when"], cfg["usage"], cfg["pick"]
+    hours = w["localHours"]
+    if len(hours) != 2 or not all(isinstance(h, int) and not isinstance(h, bool) and 0 <= h <= 24 for h in hours):
+        fail("when.localHours must be [start, end], whole hours 0-24")
+    for name, v in (("usage.weeklyBelowPercent", u["weeklyBelowPercent"]), ("usage.sessionBelowPercent", u["sessionBelowPercent"])):
+        if not 0 <= v <= 100:
+            fail(f"{name} must be 0-100")
+    if not 0 <= w["hoursBeforeWeeklyReset"] <= 168 or w["minHoursBetweenRuns"] < 0:
+        fail("when.hoursBeforeWeeklyReset must be 0-168 and when.minHoursBetweenRuns 0 or more")
+    for name in ("repos", "skipLabels", "preferLabels"):
+        if not all(isinstance(x, str) and x and len(x) <= 100 and all(c.isalnum() or c in ":._-" for c in x) for x in p[name]):
+            fail(f"pick.{name} must be a list of plain names")
+    if not p["repos"] or not p["label"] or p["maxIssuesPerRun"] < 1 or p["maxIssuesPerWeek"] < 1:
+        fail("pick needs a repo, a label and caps of at least 1")
+    return cfg
+
+
+def in_hours(now, hours):
+    start, end = hours
+    h = now.hour
+    return start <= h < end if start <= end else (h >= start or h < end)   # [22, 6] spans midnight
+
+
+def run(argv, user=None, timeout=120):
+    cmd = (["sudo", "-n", "-u", user] if user else []) + argv
+    env = {"PATH": PATH, "HOME": HOME, "LANG": "C.UTF-8", "XDG_RUNTIME_DIR": f"/run/user/{os.getuid()}"}
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd="/")
+    except subprocess.TimeoutExpired:
+        fail(f"{argv[0]} timed out")
+
+
+def parse_time(s):
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def load_state():
+    try:
+        with open(os.path.join(STATE_DIR, "state.json")) as f:
+            s = json.load(f)
+        return s if isinstance(s, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=STATE_DIR)
+    with os.fdopen(fd, "w") as f:
+        json.dump(state, f, indent=1)
+    os.replace(tmp, os.path.join(STATE_DIR, "state.json"))
+
+
+def main():
+    dry = sys.argv[1:] == ["--dry-run"]
+    if sys.argv[1:] and not dry:
+        fail("usage: claw-backlog [--dry-run]")
+    cfg = load_config(CONFIG)
+    w, u, p = cfg["when"], cfg["usage"], cfg["pick"]
+    if not cfg["enabled"]:
+        return say("skip: disabled (enabled: false)")
+
+    now = dt.datetime.now().astimezone()
+    if not in_hours(now, w["localHours"]):
+        return say(f"skip: {now:%H:%M} is outside localHours {w['localHours']}")
+
+    state = load_state()
+    last = state.get("lastHandoff")
+    if last:
+        since = (now - parse_time(last)).total_seconds() / 3600
+        if since < w["minHoursBetweenRuns"]:
+            return say(f"skip: last hand-off {since:.1f}h ago (minHoursBetweenRuns {w['minHoursBetweenRuns']})")
+
+    r = run([CLAUDE_USAGE], user="coder", timeout=90)
+    if r.returncode == 3:
+        return say("skip: Claude plan usage unavailable (claude-usage exit 3)")
+    if r.returncode != 0:
+        fail(f"claude-usage failed (exit {r.returncode}): {r.stderr.strip()[:200]}")
+    try:
+        usage = json.loads(r.stdout)
+        week, session = usage["seven_day"], usage["five_hour"]
+        weekly, five = float(week["utilization"]), float(session["utilization"])
+        reset = parse_time(week["resets_at"])
+    except (ValueError, KeyError, TypeError) as e:
+        fail(f"claude-usage gave no usable weekly and 5-hour numbers: {e}")
+    to_reset = (reset - now).total_seconds() / 3600
+    figures = f"weekly {weekly:.0f}%, 5-hour {five:.0f}%, weekly reset in {to_reset:.0f}h"
+    if weekly >= u["weeklyBelowPercent"]:
+        return say(f"skip: {figures}; weekly not below {u['weeklyBelowPercent']}%")
+    if five >= u["sessionBelowPercent"]:
+        return say(f"skip: {figures}; 5-hour not below {u['sessionBelowPercent']}%")
+    if to_reset > w["hoursBeforeWeeklyReset"]:
+        return say(f"skip: {figures}; waits until {w['hoursBeforeWeeklyReset']}h before the reset")
+
+    week_key = week["resets_at"]
+    done_this_week = state.get("weekCount", 0) if state.get("week") == week_key else 0
+    room = min(p["maxIssuesPerRun"], p["maxIssuesPerWeek"] - done_this_week)
+    if room <= 0:
+        return say(f"skip: {figures}; already handed off {done_this_week} this week (maxIssuesPerWeek {p['maxIssuesPerWeek']})")
+
+    handed = {k: v for k, v in state.get("handed", {}).items()
+              if isinstance(v, str) and (now - parse_time(v)).days < RETRY_DAYS}
+    candidates = []
+    for order, repo in enumerate(p["repos"]):
+        r = run([AGENT_GIT, "issue-list", repo, p["label"], "open"], user="gitbot")
+        if r.returncode != 0:
+            fail(f"agent-git issue-list {repo} failed (exit {r.returncode}): {r.stderr.strip()[:200]}")
+        try:
+            issues = json.loads(r.stdout)
+        except ValueError:
+            fail(f"agent-git issue-list {repo} gave no JSON")
+        for i in issues:
+            n, labels = i.get("number"), i.get("labels") or []
+            if not isinstance(n, int) or not all(isinstance(x, str) for x in labels):
+                continue
+            ref = f"{repo}#{n}"
+            if ref in handed or set(labels) & set(p["skipLabels"]):
+                continue
+            rank = min([p["preferLabels"].index(x) for x in labels if x in p["preferLabels"]], default=len(p["preferLabels"]))
+            candidates.append((rank, order, n, repo, ref))
+    picked = sorted(candidates)[:room]
+    if not picked:
+        return say(f"skip: {figures}; no open '{p['label']}' issues to pick up")
+
+    refs = [c[4] for c in picked]
+    tasks = "\n".join(
+        f"- {repo}#{n}: cwd /srv/work/{repo}. Task: \"Work on GitHub issue #{n} in the {repo} repo. Read it, "
+        f"make the change its 'Done when' line describes, and open a PR whose body says Fixes #{n}.\""
+        for _, _, n, repo, _ in picked)
+    message = (
+        f"Backlog worker (scheduled by claw-backlog, not your human typing): there is spare weekly Claude usage "
+        f"({figures}). Hand each issue below to Claude Code as its own task (see Coding work), using the task text "
+        f"as written. Don't read the issues yourself. Then send your human one short message: which issues went "
+        f"to Claude Code and the PR link each returned, or the exact error.\n{tasks}")
+    if dry:
+        return say(f"would hand off {', '.join(refs)} ({figures})\n--- message ---\n{message}")
+
+    for ref in refs:
+        handed[ref] = now.isoformat(timespec="seconds")
+    save_state({"lastHandoff": now.isoformat(timespec="seconds"), "week": week_key,
+                "weekCount": done_this_week + len(refs), "handed": handed})
+    say(f"handing off {', '.join(refs)} ({figures})")
+    r = run(["openclaw", "agent", "--agent", "main", "--message", message, "--deliver",
+             "--timeout", str(AGENT_TIMEOUT)], timeout=AGENT_TIMEOUT + 300)
+    if r.returncode != 0:
+        fail(f"the agent turn failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()[-300:]}")
+    say("agent turn finished")
+
+
+if __name__ == "__main__":
+    main()

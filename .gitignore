@@ -6,6 +6,8 @@
 !/SETUP.md
 !/.github/
 !/openclaw.json
+# claw-backlog's rules (infra/README.md: Backlog worker)
+!/backlog-worker.json
 !/workspace/
 /workspace/*
 !/workspace/*.md

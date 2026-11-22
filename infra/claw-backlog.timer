@@ -1,0 +1,10 @@
+[Unit]
+Description=Check hourly whether claw-backlog should pick up issues (the rules are in backlog-worker.json)
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

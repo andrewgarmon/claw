@@ -34,6 +34,9 @@ fi
 section "claw-sync (last 3 log lines)"
 journalctl -u claw-sync -n 3 --no-pager -o short-iso 2>&1
 
+section "backlog worker (last 2 decisions; rules in backlog-worker.json)"
+journalctl -u claw-backlog -n 2 --no-pager -o short-iso 2>&1
+
 section "broker refusals (DENY lines, last 24h; claw-smoke's included)"
 since=$(date -Is -d '-24 hours')
 while read -r name log; do
