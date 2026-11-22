@@ -31,12 +31,13 @@ EOF
   decrypt() { tail -n +2 "$1" | base64 -d; }
 fi
 
-# fake sudo -> agent-git: reads the body+bundle, refuses like a non-fast-forward while $T/reject exists
+# fake sudo -> agent-git: keeps what it's sent (the bundle) in $T/agent-in, refuses like a
+# non-fast-forward while $T/reject exists, and prints the branch URL as agent-git does for state pushes
 cat > "$BIN/sudo" <<EOF
 #!/bin/bash
-cat > /dev/null
+cat > "$T/agent-in"
 [ -e "$T/reject" ] && { echo "agent-git: refused: this would replace the history (non-fast-forward)" >&2; exit 1; }
-echo "https://github.com/x/claw-state/pull/1"
+echo "https://github.com/x/claw-state/tree/\$7"
 EOF
 # fake openclaw automations: list and get from the job files in $T/jobs (as get returns them, run
 # state included); both fail while $T/jobs_fail exists
@@ -57,7 +58,6 @@ EOF
 chmod +x "$BIN"/*
 
 host=$(hostname -s | tr -c 'A-Za-z0-9._\n-' '-')
-git init -q -b "agent/state/$host" "$H/.openclaw/state-backup"
 echo "HEALTHCHECKS_PING_URL=https://hc.example/check" > "$H/.openclaw/.env"
 ENV_LINE="HEALTHCHECKS_PING_URL=https://hc.example/check"
 
@@ -70,6 +70,11 @@ echo "v1" > "$H/.openclaw/workspace/MEMORY.md"
 run
 check "good push: exit 0, no fail ping" '[ $rc = 0 ] && grep -q "pushed" "$T/out" && [ ! -s "$T/curl.log" ]'
 check "good push: last-ok touched" '[ -e "$H/.cache/claw-backup/last-ok" ]'
+check "brand-new local repo: its own first commit (README only), then the snapshot; no root bundle needed" \
+  '[ "$(git -C "$H/.openclaw/state-backup" rev-list --count HEAD)" = 2 ] \
+   && [ "$(git -C "$H/.openclaw/state-backup" ls-tree --name-only "$(git -C "$H/.openclaw/state-backup" rev-list --max-parents=0 HEAD)")" = README.md ]'
+check "sends agent-git the bundle only (no PR body) and logs the branch URL" \
+  'head -1 "$T/agent-in" | grep -qxE "# v[23] git bundle" && grep -qF "tree/agent/state/$host" "$T/out"'
 touch -d '2 days ago' "$H/.cache/claw-backup/last-ok"
 
 echo "v2" > "$H/.openclaw/workspace/MEMORY.md"; touch "$T/reject"
